@@ -74,12 +74,59 @@ pub struct Jwt {
 	providers: Vec<Provider>,
 	location: AuthorizationLocation,
 	preserve_token: bool,
+	// Only remote JWKS sources get a refresher.
+	refreshers: Vec<JwksRefresher>,
 }
 
 #[derive(Clone)]
 pub struct Provider {
 	issuer: String,
 	keys: HashMap<String, Jwk>,
+}
+
+/// Rebuilds a single provider's keys from its remote JWKS source on demand,
+/// so a token whose `kid` predates a key rotation can succeed without
+/// waiting for the next scheduled refresh.
+#[derive(Clone)]
+struct JwksRefresher {
+	manager: crate::resource_manager::ResourceManager,
+	resource: crate::resource_manager::ResourceRef,
+	issuer: String,
+	audiences: Option<Vec<String>>,
+	jwt_validation_options: JWTValidationOptions,
+}
+
+impl JwksRefresher {
+	/// Returns `None` when the refresh was debounced, failed, or the key is still missing.
+	async fn refresh(&self, kid: &str) -> Option<Jwk> {
+		let bytes = match self.manager.refresh_and_wait(&self.resource).await {
+			Ok(bytes) => bytes,
+			Err(error) => {
+				debug!(%error, "on-demand JWKS refresh did not run");
+				return None;
+			},
+		};
+		let jwks: JwkSet = match serde_json::from_slice(&bytes) {
+			Ok(jwks) => jwks,
+			Err(error) => {
+				warn!(%error, "refetched JWKS could not be parsed");
+				return None;
+			},
+		};
+		let provider = match Provider::from_jwks(
+			jwks,
+			self.issuer.clone(),
+			self.audiences.clone(),
+			self.jwt_validation_options.clone(),
+		) {
+			Ok(provider) => provider,
+			Err(error) => {
+				warn!(%error, "refetched JWKS has no usable keys");
+				return None;
+			},
+		};
+		provider.keys.get(kid).cloned()
+	}
 }
 
 // TODO: can we give anything useful here?
@@ -350,13 +397,37 @@ impl LocalJwtConfig {
 		};
 
 		let mut providers = Vec::with_capacity(providers_cfg.len());
+		let mut refreshers = Vec::new();
 		for pc in providers_cfg {
+			let remote_resource = match pc
+				.jwks
+				.as_resource_ref(crate::resource_manager::ResourceKind::Jwks)
+			{
+				Some(resource @ crate::resource_manager::ResourceRef::Http { .. }) => Some(resource),
+				_ => None,
+			};
 			let jwks: JwkSet = pc
 				.jwks
 				.load::<JwkSet>(resources, crate::resource_manager::ResourceKind::Jwks)
 				.await
 				.map_err(JwkError::JwkLoadError)?;
-			let provider = Provider::from_jwks(jwks, pc.issuer, pc.audiences, pc.jwt_validation_options)?;
+			let provider = Provider::from_jwks(
+				jwks,
+				pc.issuer.clone(),
+				pc.audiences.clone(),
+				pc.jwt_validation_options.clone(),
+			)?;
+			if let (Some(resource), Some(manager)) =
+				(remote_resource, resources.managed_resource_manager())
+			{
+				refreshers.push(JwksRefresher {
+					manager,
+					resource,
+					issuer: pc.issuer,
+					audiences: pc.audiences,
+					jwt_validation_options: pc.jwt_validation_options,
+				});
+			}
 			providers.push(provider);
 		}
 		Ok(Jwt {
@@ -364,6 +435,7 @@ impl LocalJwtConfig {
 			providers,
 			location: authorization_location,
 			preserve_token,
+			refreshers,
 		})
 	}
 }
@@ -492,6 +564,7 @@ impl Jwt {
 			providers,
 			location: authorization_location,
 			preserve_token,
+			refreshers: Vec::new(),
 		}
 	}
 }
@@ -505,6 +578,20 @@ struct Jwk {
 #[derive(serde::Deserialize)]
 struct UnverifiedIssuer {
 	iss: Option<String>,
+}
+
+fn decode_with_key(token: &str, key: &Jwk) -> Result<Claims, TokenError> {
+	let decoded_token =
+		decode::<Map<String, Value>>(token, &key.decoding, &key.validation).map_err(|error| {
+			debug!(?error, "Token is malformed or does not pass validation.");
+
+			TokenError::Invalid(error)
+		})?;
+
+	Ok(Claims {
+		inner: decoded_token.claims,
+		jwt: SecretString::new(token.into()),
+	})
 }
 
 #[derive(Clone, Debug, Default)]
@@ -596,7 +683,7 @@ impl Jwt {
 			);
 			return Ok(());
 		};
-		let claims = match self.validate_claims(&token) {
+		let claims = match self.validate_claims_with_refresh(&token).await {
 			Ok(claims) => claims,
 			Err(e) if self.mode == Mode::Permissive => {
 				dtrace::pol_result!(
@@ -699,10 +786,23 @@ impl Jwt {
 				TokenError::UnknownKeyId(kid.to_owned())
 			})?;
 
-		decode_with(key).map_err(|error| {
-			debug!(?error, "Token is malformed or does not pass validation.");
+		decode_with_key(token, key)
+	}
 
-			TokenError::Invalid(error)
-		})
+	/// Validates a token, retrying once against a freshly fetched JWKS when
+	/// the key id is unknown. Only providers backed by a remote JWKS source
+	/// have a refresher attached, so this is a no-op elsewhere.
+	async fn validate_claims_with_refresh(&self, token: &str) -> Result<Claims, TokenError> {
+		match self.validate_claims(token) {
+			Err(TokenError::UnknownKeyId(kid)) => {
+				for refresher in &self.refreshers {
+					if let Some(key) = refresher.refresh(&kid).await {
+						return decode_with_key(token, &key);
+					}
+				}
+				Err(TokenError::UnknownKeyId(kid))
+			},
+			result => result,
+		}
 	}
 }
