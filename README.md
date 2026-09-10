@@ -1,3 +1,8 @@
+> **Giant Swarm fork.** This repository is the agentgateway line the [Giant Swarm Agent Platform](https://github.com/giantswarm/agent-platform)
+> runs: the upstream [agentgateway/agentgateway](https://github.com/agentgateway/agentgateway) release the platform is pinned to plus the
+> patches the platform carries until they are merged upstream. Which agentgateway is running, how the line is re-pinned, what is
+> published, how to contribute: **[FORK.md](FORK.md)**. `main` here is a read-only mirror of upstream `main`; the consumed branch is `giantswarm`.
+
 <div align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/agentgateway/agentgateway/refs/heads/main/img/banner-light.svg" alt="agentgateway" width="400">
