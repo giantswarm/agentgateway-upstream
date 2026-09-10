@@ -54,9 +54,11 @@ Everything on `giantswarm` that is not in the pin (`git log v1.5.0..giantswarm`)
 
 | Patch | Purpose | Fork commit | Upstream |
 |---|---|---|---|
+| Bump `google.golang.org/grpc` to v1.83.2 and `golang.org/x/crypto` to v0.55.0 in the controller module (`go get` + `go mod tidy`; lifts `x/net` 0.58.0 and `x/text` 0.41.0 with them) | Trivy on the controller image, the publish gate: CRITICAL CVE-2026-56854 (`x/crypto/ssh`, fixed 0.55.0), HIGH CVE-2026-84304 and CVE-2026-84445 (grpc, fixed 1.83.1 / 1.83.2) | the `fix(deps)` commit of pull request #2 | upstream `main` has both since #3295 (grpc, 2026-09-02) and #3303 (all Go dependencies, 2026-09-03); not for upstream. Falls away at the re-pin onto the first release containing them — the rebase will conflict on `go.mod`/`go.sum`, and the resolution is to drop this patch |
 | Fork infrastructure: this file, the README pointer, `CODEOWNERS`, `.github/workflows/publish.yaml`, `.github/workflows/sync-upstream.yaml`, `.trivyignore`; `pull_request.yml` on `giantswarm` with GitHub-hosted runners, Linux lanes only, `govulncheck` and `ci-ok`; `release.yml` without its tag trigger | the line's CI, publishing and sync | the `giantswarm` branch history | not for upstream |
 
-Nothing in the line changes agentgateway's behaviour beyond upstream v1.5.0. Giant Swarm specific configuration lives
+Nothing in the line changes agentgateway's behaviour beyond upstream v1.5.0 and the two dependency bumps upstream has since
+made itself. Giant Swarm specific configuration lives
 elsewhere: the gateway's values, routes and policies in the [agent-platform](https://github.com/giantswarm/agent-platform)
 meta and connectivity charts, the packaging in `giantswarm/agentgateway`, the Substrate router's agentgateway
 configuration in the Substrate chart.
@@ -120,7 +122,9 @@ Not published from here: the `agentgateway` and `agctl` binaries, the Windows im
 release for those).
 
 **Versions.** Image tags keep upstream's **`v` prefix** (`v1.5.0` is what the packaging chart's `appVersion`, the
-connectivity chart's `proxy.image.tag` and the retagger rules carry); chart versions are the bare semver.
+connectivity chart's `proxy.image.tag` and the retagger rules carry); chart versions are the bare semver. The sibling
+Substrate and kagent lines tag their images **without** the `v` (ko's convention) — two deliberate choices, do not "fix"
+one to match the other.
 
 - Dev build, on every push to `giantswarm`: `<next upstream patch>-dev.giantswarm.<YYYY-MM-DD>.<HH-MM-SS>.h<sha7>`
   (for the pin v1.5.0: images `v1.5.1-dev.giantswarm.…`, charts `1.5.1-dev.giantswarm.…`), the schema the sibling
@@ -144,8 +148,12 @@ by digest from there. Release digests are recorded here:
 **Scans.** Both own images are scanned with Trivy (HIGH and CRITICAL, fixable only) after the push and before the
 charts that reference them are published. A fixable finding fails the publish: bump the dependency (upstream first)
 or, when upstream has no fix, add a time-boxed entry to `.trivyignore` (`CVE-… exp:YYYY-MM-DD # reason, tracking
-issue`) — an expired entry fails again and is re-triaged, not extended. The controller's Go module graph is covered
-by `govulncheck` on every push and pull request. Trivy does not see into a Rust binary that was not built with
+issue`) — an expired entry fails again and is re-triaged, not extended. Trivy reports four Istio advisories
+(CVE-2019-14993, CVE-2021-39155, CVE-2021-39156, CVE-2022-23635) against `istio.io/istio`, which the controller imports at
+a `v0.0.0-<date>` pseudo-version of a 2026 commit: Trivy cannot order a pseudo-version against the advisories' fixed
+releases (Istio ≤ 1.13) and flags code that is years past them; they are time-boxed in `.trivyignore` until 2026-12-31
+(re-triage: an `istio.io/istio` release tag in `go.mod`, or Trivy learning pseudo-versions). The controller's Go module
+graph is covered by `govulncheck` on every push and pull request. Trivy does not see into a Rust binary that was not built with
 `cargo auditable`; upstream's `deny.toml` (`cargo deny check advisories`) is the tool for the Rust dependency graph
 and is not wired into CI yet — a known gap of the line, tracked in #37758.
 
