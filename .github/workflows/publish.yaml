@@ -390,15 +390,38 @@ jobs:
               exit 1
             fi
           done
+      - uses: imjasonh/setup-crane@feee3b6bb0d4c68370f256a4502498c9227e5c6b # v0.7
       - name: Package and push the charts
+        # Upstream's release-charts loop does not stop on a failed push, and
+        # ghcr answers the very first push to a not-yet-existing package with
+        # `permission_denied: write_package` now and then (a package-creation
+        # race; the next push succeeds). Every expected reference is verified
+        # afterwards, pushed once more when missing, and the job fails when one
+        # is still absent — a partial publish is never a green run.
         run: |
           set -o errexit -o nounset -o pipefail
           echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io --username "${{ github.actor }}" --password-stdin
           make -C controller release-charts VERSION="${TAG}" IMAGE_REGISTRY="${REGISTRY}" HELM=helm 2>&1 | tee "${RUNNER_TEMP}/charts.log"
+          missing=0
           {
             echo "## Charts ${TAG#v}"
             echo
             echo '| Chart | Digest |'
             echo '|---|---|'
-            awk '/^Pushed: /{ref=$2} /^Digest: /{printf "| `%s` | `%s` |\n", ref, $2}' "${RUNNER_TEMP}/charts.log"
           } >> "$GITHUB_STEP_SUMMARY"
+          for chart in agentgateway agentgateway-crds agentgateway-standalone; do
+            for version in "${TAG#v}" "${TAG}"; do
+              ref="${REGISTRY}/charts/${chart}:${version}"
+              if ! crane manifest "${ref}" > /dev/null 2>&1; then
+                echo "::warning::${ref} is missing after release-charts; pushing it again"
+                helm push "controller/_test/${chart}-${version}.tgz" "oci://${REGISTRY}/charts" || true
+              fi
+              if digest=$(crane digest "${ref}" 2>/dev/null); then
+                echo "| \`oci://${ref}\` | \`${digest}\` |" >> "$GITHUB_STEP_SUMMARY"
+              else
+                echo "::error::${ref} was not published"
+                missing=1
+              fi
+            done
+          done
+          exit "${missing}"
