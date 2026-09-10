@@ -1,9 +1,10 @@
 name: Release
 
+# Fork (giantswarm/agentgateway-upstream): no tag trigger here. The fork's
+# releases (`vX.Y.Z-gs.N`) are published by .github/workflows/publish.yaml to
+# ghcr.io/giantswarm/agentgateway-upstream; this file stays as upstream ships it
+# for the nightly's workflow_call and for the re-pin's diff to be minimal.
 on:
-  push:
-    tags:
-    - "v*.*.*"
   workflow_dispatch:
     inputs:
       version:
