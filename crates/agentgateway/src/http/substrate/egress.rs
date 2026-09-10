@@ -154,13 +154,38 @@ impl SubstrateEgress {
 		{
 			return Err(ProxyError::SubstrateEgressDenied("actor UID mismatch".to_owned()).into());
 		}
-		if current.status.as_ref().map(|status| status.state)
-			!= Some(protos::ateapi::ActorState::Running as i32)
-		{
-			return Err(ProxyError::SubstrateEgressDenied("actor is not running".to_owned()).into());
+		// The actor must be placed on a worker. Running is the steady state;
+		// Resuming is the workload booting or restoring on the worker that
+		// minted this certificate for exactly that placement (ate-api mints
+		// only for a worker's current assignment), and what a workload
+		// fetches to become ready -- models, skills, packages -- goes out
+		// before it serves readyz. Every other state means the actor has left
+		// its worker or is leaving it: a certificate still within its lifetime
+		// must not open a tunnel on its behalf.
+		let state = current.status.as_ref().map(|status| status.state);
+		if !placed_on_worker(state) {
+			return Err(
+				ProxyError::SubstrateEgressDenied(format!(
+					"actor is not placed on a worker (state {})",
+					state
+						.and_then(|state| protos::ateapi::ActorState::try_from(state).ok())
+						.map(|state| state.as_str_name().to_owned())
+						.unwrap_or_else(|| "unknown".to_owned())
+				))
+				.into(),
+			);
 		}
 		Ok(())
 	}
+}
+
+/// Whether an actor in `state` is placed on a worker and may open a tunnel:
+/// `Running`, or `Resuming` onto the worker that minted its certificate.
+fn placed_on_worker(state: Option<i32>) -> bool {
+	matches!(
+		state.and_then(|state| protos::ateapi::ActorState::try_from(state).ok()),
+		Some(protos::ateapi::ActorState::Running | protos::ateapi::ActorState::Resuming)
+	)
 }
 
 #[cfg(test)]
@@ -192,6 +217,26 @@ mod tests {
 			..Default::default()
 		});
 		req
+	}
+
+	#[test]
+	fn only_placed_actors_may_tunnel() {
+		use protos::ateapi::ActorState;
+		assert!(placed_on_worker(Some(ActorState::Running as i32)));
+		assert!(placed_on_worker(Some(ActorState::Resuming as i32)));
+		for state in [
+			ActorState::Unspecified,
+			ActorState::Suspending,
+			ActorState::Suspended,
+			ActorState::Pausing,
+			ActorState::Paused,
+			ActorState::Crashed,
+			ActorState::Deleting,
+		] {
+			assert!(!placed_on_worker(Some(state as i32)), "{state:?}");
+		}
+		assert!(!placed_on_worker(None));
+		assert!(!placed_on_worker(Some(-1)));
 	}
 
 	#[test]
