@@ -1,12 +1,19 @@
 name: Branch
 
+# Fork (giantswarm/agentgateway-upstream): upstream's suite on the consumed
+# branch `giantswarm` and its pull requests, on GitHub-hosted runners (the org
+# has no Blacksmith runners), Linux lanes only (the platform runs Linux), the
+# build caches rolled forward by pushes to `giantswarm`, plus govulncheck for
+# the controller's Go module graph and one aggregate `ci-ok` status for the
+# ruleset. See FORK.md.
+
 on:
   push:
     branches:
-      - "main"
+      - "giantswarm"
   pull_request:
     branches:
-      - "main"
+      - "giantswarm"
 
 concurrency:
   # GitHub concurrency keeps at most one running and one pending run per group.
@@ -36,12 +43,8 @@ jobs:
     strategy:
       matrix:
         include:
-        - os: blacksmith-4vcpu-ubuntu-2404
+        - os: ubuntu-24.04
           name: "Proxy Test"
-        - os: windows-2025
-          name: "Proxy Test (Windows)"
-        - os: macos-15
-          name: "Proxy Test (Mac)"
     runs-on: ${{ matrix.os }}
     name: ${{ matrix.name }}
     steps:
@@ -56,14 +59,14 @@ jobs:
         rust-version: "${{ env.RUST_VERSION }}"
         cache-key: proxy-test
         # PRs restore the default branch cache; only postsubmit rolls it forward.
-        save: ${{ github.ref == 'refs/heads/main' }}
+        save: ${{ github.ref == 'refs/heads/giantswarm' }}
     - name: Start validation dependencies
-      if: ${{ startsWith(matrix.os, 'blacksmith-') }}
+      if: ${{ startsWith(matrix.os, 'ubuntu-') }}
       run: tools/manage-validation-deps.sh start
     - name: Test
       run: make test
       env:
-        KEYCLOAK_AVAILABLE: ${{ startsWith(matrix.os, 'blacksmith-') && '1' || '' }}
+        KEYCLOAK_AVAILABLE: ${{ startsWith(matrix.os, 'ubuntu-') && '1' || '' }}
         # Generate Cargo's per-crate build report for the artifact below.
         TIMINGS: true
     - name: Upload cargo timings
@@ -73,11 +76,11 @@ jobs:
         path: target/cargo-timings/cargo-timing*.html
         retention-days: 2
     - name: Stop validation dependencies
-      if: ${{ always() && startsWith(matrix.os, 'blacksmith-') }}
+      if: ${{ always() && startsWith(matrix.os, 'ubuntu-') }}
       run: tools/manage-validation-deps.sh stop
 
   proxy-lint:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     steps:
     - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       with:
@@ -91,7 +94,7 @@ jobs:
         # Github cache will restore from 'main' OR the current branch.
         # If we cache PR branches, we may evict the 'main' cache and end up with no cache hits at all.
         # Ideally, we would have main be 'high priority' and not be evicted but I don't think thats possible.
-        save-if: ${{ github.ref == 'refs/heads/main' }}
+        save-if: ${{ github.ref == 'refs/heads/giantswarm' }}
     - name: Generation
       run: make generate-schema check-clean-repo check-default-members
     - name: Lint
@@ -127,7 +130,7 @@ jobs:
 
   #### Controller jobs ####
   controller-test:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     steps:
     - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       with:
@@ -138,12 +141,12 @@ jobs:
         go-version: "${{ env.GO_VERSION }}"
         go-cache-name: controller-test
         # PRs can restore the default branch caches, but only postsubmit rolls them forward.
-        save: ${{ github.ref == 'refs/heads/main' }}
+        save: ${{ github.ref == 'refs/heads/giantswarm' }}
     - name: Test
       run: go test -race ./...
 
   controller-lint:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     steps:
     - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       with:
@@ -154,7 +157,7 @@ jobs:
         go-version: "${{ env.GO_VERSION }}"
         go-cache-name: controller-lint
         # PRs can restore the default branch caches, but only postsubmit rolls them forward.
-        save: ${{ github.ref == 'refs/heads/main' }}
+        save: ${{ github.ref == 'refs/heads/giantswarm' }}
     - name: Lint
       run: make -C controller analyze
     - name: go mod tidy
@@ -167,7 +170,7 @@ jobs:
         make -C controller verify
 
   controller-e2e:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     steps:
     - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       with:
@@ -180,7 +183,7 @@ jobs:
         rust-version: "${{ env.RUST_VERSION }}"
         go-version: "${{ env.GO_VERSION }}"
         # PRs can restore the default branch caches, but only postsubmit rolls them forward.
-        save: ${{ github.ref == 'refs/heads/main' }}
+        save: ${{ github.ref == 'refs/heads/giantswarm' }}
     - name: Setup
       run: TEST_MODE=e2e ./controller/test/setup/setup-kind-ci.sh
     - name: E2E
@@ -205,7 +208,7 @@ jobs:
         cat controller/_test/ci-step-timings.log >> $GITHUB_STEP_SUMMARY
 
   controller-conformance:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     steps:
     - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       with:
@@ -257,7 +260,7 @@ jobs:
         cat controller/_test/ci-step-timings.log >> $GITHUB_STEP_SUMMARY
 
   controller-gie-conformance:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-24.04
     steps:
     - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       with:
@@ -307,3 +310,42 @@ jobs:
         echo -e '```\n' >> $GITHUB_STEP_SUMMARY
         echo -e '# GIE Conformance Timings\n' >> $GITHUB_STEP_SUMMARY
         cat controller/_test/ci-step-timings.log >> $GITHUB_STEP_SUMMARY
+
+  #### Fork jobs ####
+  # The controller's Go module graph. Upstream has no vulnerability scan of it.
+  govulncheck:
+    runs-on: ubuntu-24.04
+    steps:
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      with:
+        persist-credentials: false
+    - uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6.3.0
+      with:
+        go-version-file: go.mod
+        cache: false
+    - name: Scan the Go module graph
+      run: |
+        go install golang.org/x/vuln/cmd/govulncheck@latest
+        govulncheck ./...
+
+  # The one status the `protect-giantswarm` ruleset requires.
+  ci-ok:
+    if: always()
+    needs:
+      - proxy-test
+      - proxy-lint
+      - ui-lint
+      - controller-test
+      - controller-lint
+      - controller-e2e
+      - controller-conformance
+      - controller-gie-conformance
+      - govulncheck
+    runs-on: ubuntu-24.04
+    steps:
+    - name: Every job succeeded
+      env:
+        RESULTS: ${{ toJSON(needs) }}
+      run: |
+        jq -r 'to_entries[] | "\(.key): \(.value.result)"' <<< "$RESULTS"
+        jq -e 'all(.[]; .result == "success")' <<< "$RESULTS" > /dev/null

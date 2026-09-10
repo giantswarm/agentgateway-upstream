@@ -1,0 +1,404 @@
+# Fork (giantswarm/agentgateway-upstream): publishes the Giant Swarm line of
+# agentgateway to ghcr.io/giantswarm/agentgateway-upstream — every push to the
+# `giantswarm` branch as a dev build, every `v*` tag as a release (FORK.md,
+# "Publishing"). Upstream's release.yml without what the fork cannot use (the
+# Blacksmith runners, the GitHub release with its binaries): the data-plane
+# image built from the root Dockerfile natively per platform and merged into
+# one manifest list, the controller image from the Go binary, both signed with
+# cosign (keyless) and scanned with Trivy before upstream's three charts are
+# pushed with their image defaults stamped to this registry.
+name: publish
+
+on:
+  push:
+    branches:
+      - giantswarm
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to publish, without "v" (default: the tag without "v", or a dev version derived from the commit)'
+        required: false
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: ghcr.io/${{ github.repository }}
+  UPSTREAM_REPO: agentgateway/agentgateway
+  VEX_FILE: .github/vex/openvex.json
+
+jobs:
+  version:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+      - name: Resolve the version
+        id: version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          set -o errexit -o nounset -o pipefail
+          if [ -n "${INPUT_VERSION}" ]; then
+            version="${INPUT_VERSION#v}"
+          elif [ "${GITHUB_REF_TYPE}" = tag ]; then
+            version="${GITHUB_REF_NAME#v}"
+          else
+            # Dev version in the schema giantswarm's gitsemver emits today:
+            #   <base>-dev.<branch lowercased, [a-z0-9-]>.<committer date UTC YYYY-MM-DD>.<HH-MM-SS>.h<sha7>
+            # base = the next patch of the pin, the nearest upstream release tag
+            # reachable from the branch (the line's own tags carry a pre-release
+            # suffix and are excluded). Consumers select the channel with a Flux
+            # semverFilter on the branch part (`.*-dev\.giantswarm\..*`); the
+            # timestamp keeps semver order across rebuilds.
+            git fetch --quiet "https://github.com/${UPSTREAM_REPO}.git" 'refs/tags/v*:refs/tags/v*'
+            pin=$(git describe --tags --abbrev=0 --match 'v[0-9]*' --exclude '*-*' HEAD)
+            IFS=. read -r major minor patch <<<"${pin#v}"
+            base="${major}.${minor}.$((patch + 1))"
+            branch=$(printf '%s' "${GITHUB_REF_NAME}" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g')
+            stamp=$(TZ=UTC git show -s --format=%cd --date=format-local:%Y-%m-%d.%H-%M-%S "${GITHUB_SHA}")
+            version="${base}-dev.${branch}.${stamp}.h${GITHUB_SHA:0:7}"
+            echo "pin ${pin} -> dev base ${base}"
+          fi
+          if ! [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::'${version}' is not a semver version"
+            exit 1
+          fi
+          # Image tags keep upstream's `v` prefix (the packaging chart and the
+          # retagger rules carry it); chart versions are the bare semver.
+          echo "version=${version}" | tee -a "$GITHUB_OUTPUT"
+          echo "tag=v${version}" | tee -a "$GITHUB_OUTPUT"
+
+  # The data-plane image: upstream's Dockerfile (Rust, musl-free glibc-dynamic
+  # runner), built natively on each platform's runner — no QEMU — and pushed by
+  # digest; push-image merges the two into one manifest list.
+  build-image:
+    needs: version
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            os: ubuntu-24.04
+          - platform: linux/arm64
+            os: ubuntu-24.04-arm
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - name: Prepare
+        run: |
+          platform=${{ matrix.platform }}
+          echo "PLATFORM_PAIR=${platform//\//-}" >> "$GITHUB_ENV"
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
+        id: meta
+        with:
+          images: ${{ env.REGISTRY }}/agentgateway
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          build-args: |
+            VERSION=${{ env.VERSION }}
+            GIT_REVISION=${{ github.sha }}
+          platforms: ${{ matrix.platform }}
+          labels: ${{ steps.meta.outputs.labels }}
+          tags: ${{ env.REGISTRY }}/agentgateway
+          outputs: type=image,push-by-digest=true,name-canonical=true,push=true
+      - name: Export digest
+        run: |
+          mkdir -p "${{ runner.temp }}/digests"
+          digest="${{ steps.build.outputs.digest }}"
+          touch "${{ runner.temp }}/digests/${digest#sha256:}"
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: digests-${{ env.PLATFORM_PAIR }}
+          path: ${{ runner.temp }}/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  push-image:
+    needs:
+      - version
+      - build-image
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    env:
+      IMAGE: ghcr.io/${{ github.repository }}/agentgateway
+      TAG: ${{ needs.version.outputs.tag }}
+    steps:
+      - uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3.9.1
+      - uses: imjasonh/setup-crane@feee3b6bb0d4c68370f256a4502498c9227e5c6b # v0.7
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          path: ${{ runner.temp }}/digests
+          pattern: digests-linux-*
+          merge-multiple: true
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+      - name: Create the manifest list, push, sign, record
+        working-directory: ${{ runner.temp }}/digests
+        run: |
+          set -o errexit -o nounset -o pipefail
+          docker buildx imagetools create -t "${IMAGE}:${TAG}" $(printf "${IMAGE}@sha256:%s " *)
+          digest=$(crane digest "${IMAGE}:${TAG}")
+          cosign sign --yes "${IMAGE}@${digest}"
+          docker buildx imagetools inspect "${IMAGE}:${TAG}"
+          echo "${IMAGE}@${digest}" > "${RUNNER_TEMP}/ref-agentgateway.txt"
+          {
+            echo "## Images ${TAG}"
+            echo
+            echo '| Image | Digest (manifest list) |'
+            echo '|---|---|'
+            echo "| \`${IMAGE}:${TAG}\` | \`${digest}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: ref-agentgateway
+          path: ${{ runner.temp }}/ref-agentgateway.txt
+          if-no-files-found: error
+
+  # The controller image: the Go binary cross-compiled per platform and copied
+  # onto chainguard/static (no RUN step, so no emulation is needed — both
+  # platforms build on amd64 runners), pushed by digest and merged below.
+  build-controller-image:
+    needs: version
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            goarch: amd64
+          - platform: linux/arm64
+            goarch: arm64
+    defaults:
+      run:
+        working-directory: controller
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - name: Prepare
+        working-directory: .
+        run: |
+          platform=${{ matrix.platform }}
+          echo "PLATFORM_PAIR=${platform//\//-}" >> "$GITHUB_ENV"
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6.3.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Build the controller binary
+        run: |
+          CGO_ENABLED=0 GOARCH=${{ matrix.goarch }} GOOS=linux go build \
+            -ldflags="-X github.com/agentgateway/agentgateway/controller/pkg/version.Version=${VERSION} -s -w" \
+            -o _output/pkg/agentgateway/agentgateway-linux-${{ matrix.goarch }} \
+            ./cmd/agentgateway
+          cp cmd/agentgateway/Dockerfile.agentgateway _output/pkg/agentgateway/
+      - uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
+        id: meta
+        with:
+          images: ${{ env.REGISTRY }}/controller
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: controller/_output/pkg/agentgateway
+          file: controller/_output/pkg/agentgateway/Dockerfile.agentgateway
+          build-args: |
+            GOARCH=${{ matrix.goarch }}
+          platforms: ${{ matrix.platform }}
+          labels: ${{ steps.meta.outputs.labels }}
+          tags: ${{ env.REGISTRY }}/controller
+          outputs: type=image,push-by-digest=true,name-canonical=true,push=true
+      - name: Export digest
+        run: |
+          mkdir -p "${{ runner.temp }}/controller-digests"
+          digest="${{ steps.build.outputs.digest }}"
+          touch "${{ runner.temp }}/controller-digests/${digest#sha256:}"
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: controller-digests-${{ env.PLATFORM_PAIR }}
+          path: ${{ runner.temp }}/controller-digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  push-controller-image:
+    needs:
+      - version
+      - build-controller-image
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    env:
+      IMAGE: ghcr.io/${{ github.repository }}/controller
+      TAG: ${{ needs.version.outputs.tag }}
+    steps:
+      - uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3.9.1
+      - uses: imjasonh/setup-crane@feee3b6bb0d4c68370f256a4502498c9227e5c6b # v0.7
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          path: ${{ runner.temp }}/controller-digests
+          pattern: controller-digests-*
+          merge-multiple: true
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+      - name: Create the manifest list, push, sign, attest, record
+        run: |
+          set -o errexit -o nounset -o pipefail
+          docker buildx imagetools create -t "${IMAGE}:${TAG}" \
+            $(find "${RUNNER_TEMP}/controller-digests" -type f -exec sh -c 'printf "%s@sha256:%s " "$0" "$(basename "$1")"' "${IMAGE}" {} \;)
+          digest=$(crane digest "${IMAGE}:${TAG}")
+          cosign sign --yes "${IMAGE}@${digest}"
+          cosign attest --predicate "${VEX_FILE}" --type openvex --yes "${IMAGE}@${digest}"
+          docker buildx imagetools inspect "${IMAGE}:${TAG}"
+          echo "${IMAGE}@${digest}" > "${RUNNER_TEMP}/ref-controller.txt"
+          {
+            echo "| \`${IMAGE}:${TAG}\` | \`${digest}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0
+        with:
+          name: ref-controller
+          path: ${{ runner.temp }}/ref-controller.txt
+          if-no-files-found: error
+
+  # Both own images gate the charts: a fixable HIGH or CRITICAL finding fails
+  # the publish (fix it — bump the dependency, upstream first — or time-box it
+  # in .trivyignore with an expiry when upstream has no fix).
+  scan:
+    needs:
+      - push-image
+      - push-controller-image
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: read
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          - agentgateway
+          - controller
+    env:
+      # The trivy database mirrors, tried in order (ghcr rate-limits anonymous pulls).
+      TRIVY_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-db:2,ghcr.io/aquasecurity/trivy-db:2
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ref-${{ matrix.image }}
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Pick the image by digest
+        id: ref
+        run: |
+          set -o errexit -o nounset -o pipefail
+          ref=$(cat "ref-${{ matrix.image }}.txt")
+          test -n "${ref}"
+          echo "ref=${ref}" | tee -a "$GITHUB_OUTPUT"
+      - name: Scan
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ steps.ref.outputs.ref }}
+          format: table
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          trivyignores: .trivyignore
+          exit-code: "1"
+
+  # Upstream's three charts (controller/Makefile release-charts: agentgateway,
+  # agentgateway-crds, agentgateway-standalone; versions with and without the
+  # `v`, as upstream pushes them), with `image.registry` stamped to this
+  # registry so `helm template` renders the line's images; appVersion = the
+  # image tag. The packaging chart giantswarm/agentgateway vendors upstream's
+  # chart today and switches to these when the line carries a chart patch.
+  charts:
+    needs:
+      - version
+      - scan
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    env:
+      TAG: ${{ needs.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
+      - name: Stamp the image registry
+        run: |
+          set -o errexit -o nounset -o pipefail
+          for values in controller/install/helm/agentgateway/values.yaml controller/install/helm/agentgateway-standalone/values.yaml; do
+            sed -i "s|^  registry: cr.agentgateway.dev$|  registry: ${REGISTRY}|" "${values}"
+            grep -q "^  registry: ${REGISTRY}$" "${values}"
+            if grep -n "cr.agentgateway.dev" "${values}"; then
+              echo "::error::${values} still references upstream's registry after stamping"
+              exit 1
+            fi
+          done
+      - name: Package and push the charts
+        run: |
+          set -o errexit -o nounset -o pipefail
+          echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io --username "${{ github.actor }}" --password-stdin
+          make -C controller release-charts VERSION="${TAG}" IMAGE_REGISTRY="${REGISTRY}" HELM=helm 2>&1 | tee "${RUNNER_TEMP}/charts.log"
+          {
+            echo "## Charts ${TAG#v}"
+            echo
+            echo '| Chart | Digest |'
+            echo '|---|---|'
+            awk '/^Pushed: /{ref=$2} /^Digest: /{printf "| `%s` | `%s` |\n", ref, $2}' "${RUNNER_TEMP}/charts.log"
+          } >> "$GITHUB_STEP_SUMMARY"
