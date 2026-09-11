@@ -193,17 +193,10 @@ func ConvertGRPCRouteToAgw(ctx RouteContext, r gwv1.GRPCRouteRule,
 		// For GRPC, we don't have path match in the traditional sense, so we'll derive it from method
 		var path *api.PathMatch
 		if match.Method != nil {
-			// Convert GRPC method to path for routing purposes
-			if match.Method.Service != nil && match.Method.Method != nil {
-				pathStr := fmt.Sprintf("/%s/%s", *match.Method.Service, *match.Method.Method)
-				path = &api.PathMatch{Kind: &api.PathMatch_Exact{Exact: pathStr}}
-			} else if match.Method.Service != nil {
-				pathStr := fmt.Sprintf("/%s/", *match.Method.Service)
-				path = &api.PathMatch{Kind: &api.PathMatch_Exact{Exact: pathStr}}
-			} else if match.Method.Method != nil {
-				// Convert wildcard to regex: "/*/{method}" becomes "/[^/]+/{method}"
-				pathStr := fmt.Sprintf("/[^/]+/%s", *match.Method.Method)
-				path = &api.PathMatch{Kind: &api.PathMatch_Regex{Regex: pathStr}}
+			path, err = CreateAgwGRPCPathMatch(*match.Method)
+			if err != nil {
+				logger.Error("failed to translate grpc method match", "err", err, "route_name", obj.Name, "route_ns", obj.Namespace)
+				return nil, err
 			}
 		}
 		res.Matches = append(res.GetMatches(), &api.RouteMatch{
@@ -237,6 +230,53 @@ func ConvertGRPCRouteToAgw(ctx RouteContext, r gwv1.GRPCRouteRule,
 		return string(e)
 	})
 	return res, backendErr
+}
+
+// CreateAgwGRPCPathMatch derives the path match of a GRPCMethodMatch. A gRPC request is a POST to
+// /<service>/<method>, so the service and method select the path: with both set an Exact match is an
+// exact path; a service alone matches every method of that service as a path prefix; a method alone
+// matches that method on any service as a regex. A RegularExpression match becomes one regex over
+// the two segments, with an omitted service or method matching any single segment.
+func CreateAgwGRPCPathMatch(m gwv1.GRPCMethodMatch) (*api.PathMatch, *reporter.RouteCondition) {
+	tp := gwv1.GRPCMethodMatchExact
+	if m.Type != nil {
+		tp = *m.Type
+	}
+	switch tp {
+	case gwv1.GRPCMethodMatchExact:
+		switch {
+		case m.Service != nil && m.Method != nil:
+			return &api.PathMatch{Kind: &api.PathMatch_Exact{Exact: fmt.Sprintf("/%s/%s", *m.Service, *m.Method)}}, nil
+		case m.Service != nil:
+			// The trailing slash makes the service a whole path segment: a prefix match on
+			// "/<service>/" selects "/<service>/<method>" and not "/<service>Foo/<method>".
+			return &api.PathMatch{Kind: &api.PathMatch_PathPrefix{PathPrefix: fmt.Sprintf("/%s/", *m.Service)}}, nil
+		case m.Method != nil:
+			// Convert wildcard to regex: "/*/{method}" becomes "/[^/]+/{method}"
+			return &api.PathMatch{Kind: &api.PathMatch_Regex{Regex: fmt.Sprintf("/[^/]+/%s", *m.Method)}}, nil
+		}
+		return nil, nil
+	case gwv1.GRPCMethodMatchRegularExpression:
+		if m.Service == nil && m.Method == nil {
+			return nil, nil
+		}
+		service, method := "[^/]+", "[^/]+"
+		if m.Service != nil {
+			service = *m.Service
+		}
+		if m.Method != nil {
+			method = *m.Method
+		}
+		return &api.PathMatch{Kind: &api.PathMatch_Regex{Regex: fmt.Sprintf("/%s/%s", service, method)}}, nil
+	default:
+		// Should never happen, unless a new field is added
+		return nil, &reporter.RouteCondition{
+			Type:    gwv1.RouteConditionAccepted,
+			Status:  metav1.ConditionFalse,
+			Reason:  gwv1.RouteReasonUnsupportedValue,
+			Message: fmt.Sprintf("unknown type: %q is not supported GRPCMethodMatch type", tp),
+		}
+	}
 }
 
 // ConvertTLSRouteToAgw converts a TLSRouteRule to an agentgateway TCPRoute
