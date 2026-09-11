@@ -1,0 +1,83 @@
+apiVersion: gateway.networking.k8s.io/v1
+kind: GRPCRoute
+metadata:
+  name: grpc-regex-method-match
+  namespace: default
+spec:
+  parentRefs:
+  - name: test-gateway
+  hostnames:
+  - grpc.example.com
+  rules:
+  # RegularExpression matches become one regex over /<service>/<method>; an omitted side matches any single segment.
+  - matches:
+    - method:
+        type: RegularExpression
+        service: example\.v[0-9]+\.Service
+        method: Get.*
+    - method:
+        type: RegularExpression
+        method: List.*
+    - method:
+        type: RegularExpression
+        service: example\..*
+    backendRefs:
+    - name: infra-backend-v1
+      port: 8080
+
+---
+# Output
+output:
+- gateway:
+    Name: test-gateway
+    Namespace: default
+  resource:
+    route:
+      backends:
+      - backend:
+          port: 8080
+          service:
+            hostname: infra-backend-v1.default.svc.cluster.local
+            namespace: default
+        weight: 1
+      hostnames:
+      - grpc.example.com
+      key: default/grpc-regex-method-match.00.grpc.http
+      listenerKey: default/test-gateway.http
+      matches:
+      - path:
+          regex: /example\.v[0-9]+\.Service/Get.*
+      - path:
+          regex: /[^/]+/List.*
+      - path:
+          regex: /example\..*/[^/]+
+      name:
+        kind: GRPCRoute
+        name: grpc-regex-method-match
+        namespace: default
+status:
+- apiVersion: gateway.networking.k8s.io/v1
+  kind: GRPCRoute
+  metadata:
+    name: grpc-regex-method-match
+    namespace: default
+  spec: null
+  status:
+    parents:
+    - conditions:
+      - lastTransitionTime: fake
+        message: ""
+        reason: Accepted
+        status: "True"
+        type: Accepted
+      - lastTransitionTime: fake
+        message: ""
+        reason: ResolvedRefs
+        status: "True"
+        type: ResolvedRefs
+      controllerName: agentgateway.dev/agentgateway
+      parentRef:
+        group: gateway.networking.k8s.io
+        kind: Gateway
+        name: test-gateway
+        namespace: default
