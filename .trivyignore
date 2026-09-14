@@ -5,3 +5,13 @@
 # entry fails the scan again and is re-triaged, never just extended:
 #
 #   CVE-2026-NNNNN exp:2026-12-31 # <package@version>: why no fix exists upstream, what to track, tracked in <owner>/<repo>#NN
+
+# istio.io/istio is imported at a v0.0.0-<date> pseudo-version of a 2026 commit;
+# Trivy cannot order a pseudo-version against the advisories' fixed releases
+# (Istio <= 1.13) and flags advisories the code is years past. Re-triage when the
+# controller pins an istio.io/istio release tag or Trivy learns pseudo-versions.
+# Tracked in giantswarm/giantswarm#37758.
+CVE-2019-14993 exp:2026-12-31 # istio.io/istio@v0.0.0-20260806113403-f1a56063393c: envoy regex DoS, fixed in Istio 1.1.13/1.2.4 — pseudo-version false positive
+CVE-2021-39155 exp:2026-12-31 # istio.io/istio@v0.0.0-20260806113403-f1a56063393c: case-insensitive host authz bypass, fixed in Istio 1.9.8/1.10.4/1.11.1 — pseudo-version false positive
+CVE-2021-39156 exp:2026-12-31 # istio.io/istio@v0.0.0-20260806113403-f1a56063393c: URI fragment authz bypass, fixed in Istio 1.9.8/1.10.4/1.11.1 — pseudo-version false positive
+CVE-2022-23635 exp:2026-12-31 # istio.io/istio@v0.0.0-20260806113403-f1a56063393c: unauthenticated control-plane DoS, fixed in Istio 1.13.1/1.12.4/1.11.7 — pseudo-version false positive
