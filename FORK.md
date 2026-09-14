@@ -30,61 +30,74 @@ the branch that was not a pull request or a re-pin), then adding the fork's file
 
 | | |
 |---|---|
-| Upstream tag | **v1.5.0** (2026-08-27; tag commit `fe673247`, "Substrate Refinements (#3174)") |
-| Why this one | Both consumers run it. The packaging chart `giantswarm/agentgateway` vendors upstream's chart v1.5.0 and its images. The Substrate line (`giantswarm/substrate`, pinned to kagent-dev/substrate **v0.0.26**) deploys `ghcr.io/kagent-dev/substrate/agentgateway:c0f5597c7cb8` for atenet-router and atenet-egress — a build from upstream's Dockerfile dated 2026-08-30 without a revision label: a pre-merge build of agentgateway#3237 (the CONNECT-time actor authorization, merged 2026-09-01, in no release yet), so v1.5.0 plus that change is the substrate support the Substrate line's router and egress expect — the line carries it (see "Carried patches"). |
-| When it moves | with the consumers, proven in agentlab first (`agentlab configure --defaults --chart-branch poc/kagent-main && agentlab up` and the proofs) — see "Re-pin" and "Convergence with the Substrate line". Not on a schedule. |
-| Derived how | `git describe --tags --abbrev=0 --match 'v[0-9]*' --exclude '*-*' giantswarm` with upstream's tags fetched; the line's own tags carry a pre-release suffix and are excluded. The workflows compute it, nothing records it twice. |
+| Upstream commit | **`main` @ `c1d24607`** (2026-09-14, "build(deps): bump the cargo-weekly group with 18 updates (#3454)"; 118 commits past v1.5.0). A `main` commit, not a release tag: upstream has released nothing since v1.5.0 (2026-08-27), and the Substrate line's pin needs what `main` carries (below). The line returns to a release tag at the first upstream release that contains `9f9744cf` (v1.6.0 by upstream's cadence). |
+| Why this one | The Substrate line (`giantswarm/substrate`) is pinned to kagent-dev/substrate **v0.0.29**, whose chart declares the egress actor check as the frontend policy `substrateEgressActorResolution` of agentgateway#3318 and whose `atenet-router` speaks the substrate ingress protocol of agentgateway#3409/#3410/#3428 — upstream kagent-dev/substrate pins a nightly of upstream commit `9f9744cf` for it ([kagent-dev/substrate#28](https://github.com/kagent-dev/substrate/pull/28)). Any `main` commit ≥ `9f9744cf` serves; the line takes `main`'s head of the day the three lines moved together (agentgateway → Substrate → kagent, giantswarm/giantswarm#37742). The packaging chart `giantswarm/agentgateway` follows the same release for the platform's controller and data plane (see "Consumers"). |
+| When it moves | with the consumers, proven in agentlab first — see "Re-pin". Not on a schedule. Previous pin: v1.5.0 (2026-09-10 → 2026-09-14, releases `v1.5.1-gs.1`–`gs.3`). |
+| Derived how | `git describe --tags --abbrev=0 --match 'v[0-9]*' --exclude '*-*' giantswarm` with upstream's tags fetched names the nearest upstream release **below** the pin — v1.5.0 — so the dev base and the release base stay `1.5.1` while the pin is a `main` commit; the line's own tags carry a pre-release suffix and are excluded. The pin itself is `git merge-base giantswarm main` (the mirror). The workflows compute both, nothing records them twice. |
 
 ### Convergence with the Substrate line
 
-Upstream kagent-dev/substrate `main` moved its router image to `ghcr.io/agentgateway/agentgateway:v0.0.0-alpha.9f9744cf`
-([kagent-dev/substrate#28](https://github.com/kagent-dev/substrate/pull/28), 2026-09-10) — a nightly of upstream
-agentgateway commit `9f9744cf` ("substrate: Fix custom port (#3428)", 117 commits past v1.5.0). Between v1.5.0 and it
-upstream changed the substrate protocol: #3237 (authorize actor egress at CONNECT time), #3289, #3333 (router metrics),
-#3335, #3318 (egress policy), **#3409 (the new substrate ingress header)**, #3428. The Substrate line's next re-pin, onto
-the first release containing kagent-dev/substrate#28, therefore needs an agentgateway ≥ `9f9744cf`: this line moves to
-the first upstream release that contains those commits (v1.6.0 by upstream's cadence) or carries them until then. If at
-that point the packaging chart cannot follow the same release, the platform's data-plane release stays the line and
-the Substrate router goes back to a digest mirror of upstream's alpha until both converge — one branch serves both
-consumers only while their pins agree.
+Upstream kagent-dev/substrate moved its router image to `ghcr.io/agentgateway/agentgateway:v0.0.0-alpha.9f9744cf`
+([kagent-dev/substrate#28](https://github.com/kagent-dev/substrate/pull/28), 2026-09-10, in v0.0.28 and v0.0.29) — a
+nightly of upstream agentgateway commit `9f9744cf` ("substrate: Fix custom port (#3428)", 117 commits past v1.5.0).
+Between v1.5.0 and it upstream changed the substrate protocol: #3237 (authorize actor egress at CONNECT time), #3289,
+#3333 (router metrics), #3335, #3318 (egress policy, `substrateEgressActorResolution`), **#3409 (the new substrate
+ingress header)**, #3428. The Substrate line's re-pin onto v0.0.29 (2026-09-14) therefore moved this line onto `main`
+≥ `9f9744cf` first, and the Substrate chart pins this line's `v1.5.1-gs.4` for `atenet-router` and `atenet-egress`.
+One branch serves both consumers: the packaging chart runs the same release for the platform's controller and data
+plane (its vendored chart stays upstream's v1.5.0 — the chart did not change between v1.5.0 and the pin in a way the
+platform's values touch; the drift is recorded in the packaging chart's own `FORK.md`/README and closes at the first
+upstream release the line moves onto).
 
 ## Carried patches
 
-Everything on `giantswarm` that is not in the pin (`git log v1.5.0..giantswarm`):
+Everything on `giantswarm` that is not in the pin (`git log main..giantswarm`, the mirror `main` being the pin):
 
 | Patch | Purpose | Fork commit | Upstream |
 |---|---|---|---|
-| Authorize an actor's egress at CONNECT time: the egress dataplane reads the actor (atespace, name, UID, purpose `atunnel`) from the tunnel's client certificate and asks ate-api (`GetActor`) whether that UID is the actor's and the actor is placed on a worker before it opens the tunnel — upstream agentgateway#3237, `cherry-pick -x` of `8cbb254d`; `schema/config.{json,md}` regenerated against the pin (`make generate-schema`) | the Substrate line's `atenet-egress` runs this check in the request path (its egress config carries the `substrateEgress` policy and no `ext_proc`, so atenet's handler is not consulted); kagent-dev's `c0f5597c7cb8`, the image Substrate v0.0.26 pinned, was a pre-merge build of it. The line keeps that authorization rather than falling back to v1.5.0's, which derives the actor from the SPIFFE id and checks nothing else | the `substrate: authorize actor egress at CONNECT time (#3237)` commit of pull request #4 | merged in upstream `main` on 2026-09-01, not in v1.5.0. Falls away at the re-pin onto the first release containing it — the rebase will conflict on the regenerated `schema/` files, and the resolution is to drop this patch |
-| Admit a `RESUMING` actor at CONNECT time next to `RUNNING` (SUSPENDED, PAUSED, CRASHED and DELETING stay refused; the denial names the state) | Substrate commits `RUNNING` only after the workload served readyz; a workload that fetches what it needs to become ready — kagent's Go ADK and Claude harnesses materialise git skills before readyz — was refused (`403 Forbidden: actor is not running`) and its ActorTemplate never got its golden snapshot ([#37742](https://github.com/giantswarm/giantswarm/issues/37742) row 8; acceptance test `agentlab skills-test`, [agentlab#137](https://github.com/giantswarm/agentlab/issues/137)). Counterpart of the Substrate line's [giantswarm/substrate#4](https://github.com/giantswarm/substrate/pull/4) (ateom arms the tunnel before the first container starts, atenet's `ext_proc` admits `RESUMING`) | the `substrate: admit a resuming actor's egress at CONNECT time` commit of pull request #4 — the same change in `egress.rs`, where the check lives on this base | to file: the upstream-shaped patch is branch [`upstream/substrate-egress-resuming`](https://github.com/giantswarm/agentgateway-upstream/tree/upstream/substrate-egress-resuming) here (`7771e400`, on the mirror `main`, where the check lives in `egress_actor_resolution.rs` since #3318); a team member opens the agentgateway pull request with DCO sign-off once #37742 has reviewed it |
-| Translate a `GRPCRoute` service-only method match to a path prefix and honour `type: RegularExpression` (`CreateAgwGRPCPathMatch` in the controller's translator): a service-only match became `PathMatch_Exact "/<service>/"`, a path no `/Service/Method` request has, so the rule never matched; a `RegularExpression` match with a service was emitted as an exact match on the regex text | the platform routes a gRPC API through a `GRPCRoute` that matches its services (so a new RPC needs no route change) — with the defect every call fell through to the catch-all `HTTPRoute` behind it (found on agentgateway v1.5.0 controller and proxy, identical on `main`); until the fix is on the line the chart enumerates every service+method pair as exact matches | the `fix(controller): translate GRPCRoute service-only and RegularExpression method matches` commit of pull request #6 | to file: no upstream issue or pull request covers it (searched 2026-09-11); the upstream-shaped patch is branch [`upstream/grpcroute-method-match-translation`](https://github.com/giantswarm/agentgateway-upstream/tree/upstream/grpcroute-method-match-translation) here (on the mirror `main`); a team member opens the agentgateway pull request with DCO sign-off once #37742 has reviewed it (row 25). Falls away at the re-pin onto the first release containing it |
-| Bump `google.golang.org/grpc` to v1.83.2 and `golang.org/x/crypto` to v0.55.0 in the controller module (`go get` + `go mod tidy`; lifts `x/net` 0.58.0 and `x/text` 0.41.0 with them) | Trivy on the controller image, the publish gate: CRITICAL CVE-2026-56854 (`x/crypto/ssh`, fixed 0.55.0), HIGH CVE-2026-84304 and CVE-2026-84445 (grpc, fixed 1.83.1 / 1.83.2) | the `fix(deps)` commit of pull request #2 | upstream `main` has both since #3295 (grpc, 2026-09-02) and #3303 (all Go dependencies, 2026-09-03); not for upstream. Falls away at the re-pin onto the first release containing them — the rebase will conflict on `go.mod`/`go.sum`, and the resolution is to drop this patch |
-| Fork infrastructure: this file, the README pointer, `CODEOWNERS`, `.github/workflows/publish.yaml`, `.github/workflows/sync-upstream.yaml`, `.trivyignore`; `pull_request.yml` on `giantswarm` with GitHub-hosted runners, Linux lanes only, `govulncheck` and `ci-ok`; `release.yml` without its tag trigger | the line's CI, publishing and sync | the `giantswarm` branch history | not for upstream |
+| Admit a `RESUMING` actor at CONNECT time next to `RUNNING` (SUSPENDED, PAUSED, CRASHED and DELETING stay refused; the denial names the state) | Substrate commits `RUNNING` only after the workload served readyz; a workload that fetches what it needs to become ready — kagent's Go ADK and Claude harnesses materialise git skills before readyz — was refused (`403 Forbidden: actor is not running`) and its ActorTemplate never got its golden snapshot ([#37742](https://github.com/giantswarm/giantswarm/issues/37742) row 8; acceptance test `agentlab skills-test`, [agentlab#137](https://github.com/giantswarm/agentlab/issues/137)). Counterpart of the Substrate line's [giantswarm/substrate#4](https://github.com/giantswarm/substrate/pull/4) (ateom arms the tunnel before the first container starts, atenet's `ext_proc` admits `RESUMING`) | `9a4c4731` (the `substrate: admit a resuming actor's egress at CONNECT time` commit; on the v1.5.0 base it was the same change in `egress.rs`, pull request #4 — at the 2026-09-14 re-pin the prepared main-shaped commit `7771e400` of `upstream/substrate-egress-resuming` replaced it, the check having moved to `egress_actor_resolution.rs` in #3318) | to file: the upstream-shaped patch is branch [`upstream/substrate-egress-resuming`](https://github.com/giantswarm/agentgateway-upstream/tree/upstream/substrate-egress-resuming) here (`7771e400`, on the mirror `main` @ `fddff503`; the carried commit is this commit replayed); a team member opens the agentgateway pull request with DCO sign-off once #37742 has reviewed it (row 8) |
+| Translate a `GRPCRoute` service-only method match to a path prefix and honour `type: RegularExpression` (`CreateAgwGRPCPathMatch` in the controller's translator): a service-only match became `PathMatch_Exact "/<service>/"`, a path no `/Service/Method` request has, so the rule never matched; a `RegularExpression` match with a service was emitted as an exact match on the regex text | the platform routes a gRPC API through a `GRPCRoute` that matches its services (so a new RPC needs no route change) — with the defect every call fell through to the catch-all `HTTPRoute` behind it (found on agentgateway v1.5.0 controller and proxy, identical on `main` @ the pin); until the fix is on the line the chart enumerates every service+method pair as exact matches | `8990e17c` (the `fix(controller): translate GRPCRoute service-only and RegularExpression method matches` commit of pull request #6, replayed clean at the 2026-09-14 re-pin) | to file: no upstream issue or pull request covers it (searched 2026-09-11); the upstream-shaped patch is branch [`upstream/grpcroute-method-match-translation`](https://github.com/giantswarm/agentgateway-upstream/tree/upstream/grpcroute-method-match-translation) here (on the mirror `main`); a team member opens the agentgateway pull request with DCO sign-off once #37742 has reviewed it (row 25). Falls away at the re-pin onto the first release containing it |
+| Fork infrastructure: this file, the README pointer, `CODEOWNERS`, `.github/workflows/publish.yaml`, `.github/workflows/sync-upstream.yaml`, `.trivyignore`; `pull_request.yml` on `giantswarm` and on `sync/**` pushes (a re-pin candidate is a rebased branch, so a pull request from it runs no `pull_request` workflow — the push runs `ci-ok`) with GitHub-hosted runners, Linux lanes only, `govulncheck` and `ci-ok`; `release.yml` without its tag trigger | the line's CI, publishing and sync | the `giantswarm` branch history | not for upstream |
 
-Three patches change agentgateway's behaviour beyond upstream v1.5.0: the CONNECT-time actor authorization upstream has
-merged since, and the admission of a resuming actor and the `GRPCRoute` method-match translation, both written for
-upstream and leaving at the first release that carries them; the dependency bumps are what upstream has since made itself. Giant Swarm specific configuration lives
-elsewhere: the gateway's values, routes and policies in the [agent-platform](https://github.com/giantswarm/agent-platform)
-meta and connectivity charts, the packaging in `giantswarm/agentgateway`, the Substrate router's agentgateway
-configuration in the Substrate chart.
+Two patches change agentgateway's behaviour beyond upstream `main` at the pin: the admission of a resuming actor and
+the `GRPCRoute` method-match translation, both written for upstream and leaving at the first upstream commit that
+carries them. Dropped at the 2026-09-14 re-pin because upstream had merged them: the `cherry-pick -x` of agentgateway#3237
+(the CONNECT-time actor authorization, upstream `8cbb254d`) and the grpc/x/crypto dependency bumps (upstream #3295 and
+#3303). Giant Swarm specific configuration lives elsewhere: the gateway's values, routes and policies in the
+[agent-platform](https://github.com/giantswarm/agent-platform) meta and connectivity charts, the packaging in
+`giantswarm/agentgateway`, the Substrate router's agentgateway configuration in the Substrate chart.
 
 ## Re-pin
 
-The re-pin moves the line onto a new upstream release tag and replays the carried patches; a patch upstream has
-merged falls away by itself (`git rebase` drops already-applied patches). It is the one sanctioned rewrite of
-`giantswarm`.
+The re-pin moves the line onto a new upstream commit — a release tag, or a `main` commit while upstream has no
+release with what the consumers need — and replays the carried patches; a patch upstream has merged falls away by
+itself (`git rebase` drops already-applied patches). It is the one sanctioned rewrite of `giantswarm`.
 
-1. Decide the tag with the consumers: the packaging chart's vendored chart version and the Substrate line's router
-   protocol (see "Convergence") must both be served by it.
-2. Run **Actions → sync-upstream → Run workflow** with `pin` = the tag (for example `v1.6.0`). The workflow mirrors
-   `main`, rebases the carried patches onto the tag, builds the controller as a smoke, and force-pushes `giantswarm`.
-   The push runs upstream's suite (`pull_request.yml`) and `publish` builds the dev build.
-   - On a conflict it pushes `sync/<date>-<tag>` (the new tag + the patches that applied before the conflict) and
+1. Decide the pin with the consumers: the packaging chart's vendored chart version and the Substrate line's router
+   protocol (see "Convergence") must both be served by it. The three lines move in one order — this line first, then
+   the Substrate line (its chart pins this line's release), then the kagent line (its `go.mod` pins Substrate).
+2. Run **Actions → sync-upstream → Run workflow** with `pin` = the tag or commit (for example `v1.6.0`). The workflow
+   mirrors `main`, rebases the carried patches onto the pin, builds the controller as a smoke, and force-pushes
+   `giantswarm`. The push runs upstream's suite (`pull_request.yml`) and `publish` builds the dev build.
+   - On a conflict it pushes `sync/<date>-<pin>` (the new pin + the patches that applied before the conflict) and
      opens a pull request that names the conflicting patch and the ones behind it. Finish it by hand: check the
-     branch out, `git cherry-pick -x` the rest, resolve, test, `git push --force-with-lease origin HEAD:giantswarm`,
-     close the pull request. **Do not merge it** — the line is a rebased branch; a merge would fold the old pin back in.
+     branch out, `git cherry-pick -x` the rest, resolve, test, push the branch (`pull_request.yml` runs `ci-ok` on a
+     `sync/**` push — the pull request itself runs nothing, a rebased branch has no merge commit), then
+     `git push --force-with-lease=refs/heads/giantswarm origin HEAD:giantswarm` and close the pull request. **Do not
+     merge it** — the line is a rebased branch; a merge would fold the old pin back in.
    - `dry_run: true` does everything except the pushes; the run summary shows the outcome.
 3. Update this file (pin, carried patches) in a pull request, and the agentgateway rows of #37742.
-4. Tag a release (`vX.Y.Z-gs.1`), move the consumers to it (see "Consumers"), prove it in agentlab.
+4. Tag a release (`vX.Y.Z-gs.N`), move the consumers to it (see "Consumers"), prove it in agentlab — for a move the
+   Substrate line depends on, the release is cut once `ci-ok` is green on the exact head (the Substrate chart's
+   publish resolves the release image by digest), and the agentlab proof runs on the three lines' builds together
+   before the Substrate and kagent releases follow.
+
+The 2026-09-14 re-pin (v1.5.0 → `main` @ `c1d24607`) by hand, in a scratch worktree: `git rebase --onto upstream/main
+v1.5.0` dropped the deps bump and the #3237 cherry-pick (`git rebase --skip` on their `go.mod`/`schema` conflicts),
+the resuming admission conflicted in `egress.rs` and was replaced by `git cherry-pick 7771e400` (the prepared
+main-shaped commit), the `GRPCRoute` fix replayed clean; `go build ./...` and `cargo fmt --check` locally, the Rust
+lanes in CI on the `sync/20260914-main-c1d24607` push; the force-push by a repository admin (a bypass actor of the
+`giantswarm` ruleset). `schema/config.{json,md}` needed no regeneration (the remaining Rust patch touches no config type).
 
 The weekly run (Mondays 05:41 UTC) does not re-pin: it mirrors `main` and **probes** whether the carried patches
 still rebase onto upstream `main`, naming the first patch that would conflict in the run summary, so the next
@@ -105,9 +118,10 @@ Manual equivalent (a workstation, upstream as a remote):
 ```sh
 git fetch upstream main 'refs/tags/v*:refs/tags/v*'
 git checkout giantswarm
-git rebase --onto v1.6.0 v1.5.0          # new pin, old pin
+git rebase --onto v1.6.0 "$(git merge-base giantswarm upstream/main)"   # new pin, old pin (a tag or a main commit)
 go build ./... && make lint
-git push --force-with-lease origin giantswarm
+git push origin HEAD:sync/$(date -u +%Y%m%d)-v1.6.0                        # ci-ok on the candidate
+git push --force-with-lease=refs/heads/giantswarm origin HEAD:giantswarm
 ```
 
 ## Publishing
