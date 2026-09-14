@@ -11,6 +11,10 @@ on:
   push:
     branches:
       - "giantswarm"
+      # A re-pin candidate (FORK.md, "Re-pin"): a rebased branch never merges
+      # cleanly into `giantswarm`, so a pull request from it gets no
+      # pull_request run — the push is what runs ci-ok on it.
+      - "sync/**"
   pull_request:
     branches:
       - "giantswarm"
