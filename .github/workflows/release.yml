@@ -1,24 +1,13 @@
 name: Release
 
-# Fork (giantswarm/agentgateway-upstream): no tag trigger here. The fork's
-# releases (`vX.Y.Z-gs.N`) are published by .github/workflows/publish.yaml to
-# ghcr.io/giantswarm/agentgateway-upstream; this file stays as upstream ships it
-# for the nightly's workflow_call and for the re-pin's diff to be minimal.
+# Fork (giantswarm/agentgateway-upstream): no tag and no workflow_dispatch
+# trigger here, so nothing runs this file in this repository — the line's
+# releases (`vX.Y.Z-gs.N`) and dev builds are published by .circleci/config.yml
+# to gsoci.azurecr.io (FORK.md, "Publishing"); nothing pushes to ghcr.io. The
+# steps stay as upstream ships them for the nightly's workflow_call (which
+# upstream's repository guard never takes here) and for the re-pin's diff to be
+# minimal.
 on:
-  workflow_dispatch:
-    inputs:
-      version:
-        description: 'Version number'
-      skip_gh_release:
-        description: 'Skip creating a GitHub release'
-        required: false
-        default: false
-        type: boolean
-      extra_helm_tag:
-        description: 'Additional Helm chart version to push (e.g. 0.0.0-latest-dev)'
-        required: false
-        default: ''
-        type: string
   workflow_call:
     inputs:
       version:
