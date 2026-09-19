@@ -1,388 +1,209 @@
 # Fork (giantswarm/agentgateway-upstream): the line's publishing pipeline.
-# Every push to `giantswarm` publishes a dev build and every `vX.Y.Z-gs.N` tag
-# a release of the two images the platform runs — the data-plane proxy
-# `giantswarm/agentgateway` (upstream's root Dockerfile) and the controller
-# `giantswarm/agentgateway-controller` (the Go binary on chainguard/static) —
-# to the org's registries, gsoci.azurecr.io first: linux/amd64 and linux/arm64,
-# each built natively, joined into one index, signed and attested (SLSA
-# provenance, SPDX SBOM) with the org's CircleCI identity through the architect
-# orb, then scanned. Nothing is published from GitHub Actions or by hand.
+# Every push to `giantswarm` publishes a dev build and every release tag
+# (`vX.Y.Z`, or `vX.Y.Z-rc.N` for a release candidate) a release of the two
+# images the platform runs — the data-plane proxy (upstream's root Dockerfile)
+# and the controller (.circleci/Dockerfile.controller) — under the line's own
+# path in the org's registries, gsoci.azurecr.io first:
+#
+#   gsoci.azurecr.io/giantswarm/agentgateway-upstream/agentgateway:<version>
+#   gsoci.azurecr.io/giantswarm/agentgateway-upstream/controller:<version>
+#
+# The architect orb's stock jobs do all of it. `push-to-registries` takes the
+# version from gitsemver — a release tag `vX.Y.Z` gives the image tag `X.Y.Z`,
+# a branch commit gitsemver's dev version — builds linux/amd64 and linux/arm64,
+# pushes, signs and attests (SLSA provenance, SPDX SBOM) with the org's CircleCI
+# identity. The data plane's platforms are built natively on a machine of each
+# architecture (`build-image`) and joined into one index; the controller is one
+# multi-platform build of a Dockerfile that cross-compiles. Both images are
+# scanned with Trivy after the push; releases reach the China mirror through
+# `sync-china-registry`. Nothing is published from GitHub Actions or by hand.
 # FORK.md, "Publishing".
 #
-# The orb's stock jobs (build-image, push-to-registries) are not used as jobs:
-# they take the version from `gitsemver`, which knows stable and `-rc.N` tags
-# only and would publish a `-gs.N` release under a dev version. The jobs below
-# run the orb's own commands — the ones those jobs run — around a version step
-# of the line's making, so the images are built, pushed, merged, signed and
-# attested exactly as the orb does it.
-#
-# Every other branch runs the `version` job alone (the `check` workflow): it
-# proves the version step on the branch and gives the pull request one green
-# CircleCI workflow — the merge tooling reads a pipeline without workflows as
-# one that has not started yet. Triggering a dev build of another branch (a
-# proof before a merge), or a one-off version: the CircleCI API with pipeline
-# parameters, for example
-#   {"branch": "fork/topic", "parameters": {"publish": true}}
-# — the equivalent of the retired publish workflow's workflow_dispatch.
+# Every other branch runs the same builds with `push: false` (the `validate`
+# workflow): the Dockerfiles and the build arguments are proven on the pull
+# request, nothing is pushed.
 version: 2.1
 
 orbs:
-  architect: giantswarm/architect@10.5.0
+  architect: giantswarm/architect@10.6.0
 
-parameters:
-  publish:
-    description: >
-      Publish a dev build of a branch other than `giantswarm` (set by an
-      API-triggered pipeline; pushes to other branches run nothing).
-    type: boolean
-    default: false
-  version:
-    description: >
-      Publish under this version instead of the derived one (a one-off; bare
-      semver, without the `v` the image tag carries).
-    type: string
-    default: ""
+# The upstream commit the line is pinned to (FORK.md, "Pin"), stamped on every
+# published index so a consumer can read which agentgateway it runs without
+# this repository at hand. Updated at every re-pin (FORK.md, "Re-pin").
+upstream_annotation: &upstream_annotation |
+  index:io.giantswarm.upstream.version=main@c1d24607
 
-# The version is decided once per pipeline (job `version`) and read from the
-# workspace everywhere else, so both images, their labels and the controller
-# binary carry the same string. Image tags keep upstream's `v` prefix (the
-# packaging chart, the connectivity chart and the Substrate chart carry it);
-# the version inside the binaries is bare, as upstream builds it.
-release_tag_pattern: &release_tag_pattern /^v[0-9]+\.[0-9]+\.[0-9]+-gs\.[0-9]+$/
+# Upstream's Dockerfile refuses to build without VERSION and GIT_REVISION
+# (`agentgateway --version` must not report "unknown"); DOCKER_IMAGE_TAG is the
+# version the orb computed for this pipeline.
+agentgateway_build_args: &agentgateway_build_args |
+  VERSION=${DOCKER_IMAGE_TAG}
+  GIT_REVISION=${CIRCLE_SHA1}
 
-release_filters: &release_filters
-  tags:
-    only: *release_tag_pattern
-  branches:
-    ignore: /.*/
+controller_build_args: &controller_build_args |
+  VERSION=${DOCKER_IMAGE_TAG}
 
 publish_filters: &publish_filters
+  branches:
+    only: giantswarm
   tags:
-    only: *release_tag_pattern
+    only: /^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$/
 
-# When the publish workflow runs: the consumed branch, a release tag, or an
-# API-triggered pipeline asking for it. The check workflow runs otherwise.
-publish_when: &publish_when
-  or:
-    - equal: [giantswarm, << pipeline.git.branch >>]
-    - matches:
-        pattern: '^v[0-9]+\.[0-9]+\.[0-9]+-gs\.[0-9]+$'
-        value: << pipeline.git.tag >>
-    - << pipeline.parameters.publish >>
+release_filters: &release_filters
+  branches:
+    ignore: /.*/
+  tags:
+    only: /^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$/
 
-commands:
-  use-version:
-    description: >
-      Export the pipeline's image tag from the workspace the way the orb's
-      image-prepare-tag command does (DOCKER_IMAGE_TAG, /tmp/.docker_image_tag),
-      so the orb's commands build, merge, sign and attest under it.
-    steps:
-      - run:
-          name: Read the pipeline's version
-          command: |
-            set -o errexit -o nounset -o pipefail
-            test -s .build_version
-            printf 'v%s' "$(cat .build_version)" > /tmp/.docker_image_tag
-            echo 'export DOCKER_IMAGE_TAG=$(cat /tmp/.docker_image_tag)' >> "$BASH_ENV"
-            echo "version $(cat .build_version), image tag $(cat /tmp/.docker_image_tag)"
-
-  save-image-data:
-    description: >
-      Record the pushed registry and tag for the orb's sync-china-registry job,
-      as its push-to-registries job does (the two push jobs of a pipeline record
-      the same values; the first save wins, the second is a no-op).
-    steps:
-      - save_cache:
-          key: image-data-{{.Environment.CIRCLE_PIPELINE_ID}}
-          paths:
-            - /tmp/.docker_image_registry
-            - /tmp/.docker_image_tag
+validate_filters: &validate_filters
+  branches:
+    ignore: giantswarm
 
 jobs:
-  version:
-    executor: architect/architect
-    resource_class: small
-    steps:
-      - checkout
-      - run:
-          name: Resolve the version
-          command: |
-            set -o errexit -o nounset -o pipefail
-            if [ -n "<< pipeline.parameters.version >>" ]; then
-              version="<< pipeline.parameters.version >>"
-              version="${version#v}"
-            elif [ -n "${CIRCLE_TAG:-}" ]; then
-              # A release: vX.Y.Z-gs.N, where X.Y.Z is upstream's next version and N
-              # counts the line's releases of the pin (FORK.md, "Publishing").
-              version="${CIRCLE_TAG#v}"
-              if ! [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+-gs\.[0-9]+$ ]]; then
-                echo "ERROR: '${CIRCLE_TAG}' is not a release tag of the line (vX.Y.Z-gs.N)" >&2
-                exit 1
-              fi
-            else
-              # A dev build: gitsemver's dev version of this commit. The base is the
-              # next patch of the nearest stable tag reachable from HEAD (pre-release
-              # tags, the line's -gs.N releases included, are skipped) — upstream's
-              # release tags, which are not in this repository, are fetched first;
-              # without them the base would be 0.0.0.
-              git fetch --quiet https://github.com/agentgateway/agentgateway.git 'refs/tags/v*:refs/tags/v*'
-              export GS_BRANCH_NAME="${CIRCLE_BRANCH}"
-              version="$(gitsemver get)"
-              gitsemver validate --type dev "${version}"
-            fi
-            if ! [[ "${version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
-              echo "ERROR: '${version}' is not a semver version" >&2
-              exit 1
-            fi
-            printf '%s' "${version}" > .build_version
-            echo "version ${version} (image tag v${version}) for ${CIRCLE_SHA1}"
-      - persist_to_workspace:
-          root: .
-          paths:
-            - .build_version
-            - .trivyignore
-
-  # The controller binary, cross-compiled for both platforms (CGO_ENABLED=0,
-  # upstream's ldflags), for the COPY-only controller image below.
-  build-controller:
-    docker:
-      - image: cimg/go:1.27.1
-    resource_class: large
-    steps:
-      - checkout
-      - attach_workspace:
-          at: .
-      - restore_cache:
-          keys:
-            - go-mod-v1-{{ checksum "go.sum" }}
-            - go-mod-v1-
-      - run:
-          name: Build the controller for linux/amd64 and linux/arm64
-          command: |
-            set -o errexit -o nounset -o pipefail
-            version="$(cat .build_version)"
-            out=controller/_output/pkg/agentgateway
-            mkdir -p "${out}"
-            for arch in amd64 arm64; do
-              CGO_ENABLED=0 GOOS=linux GOARCH="${arch}" go build \
-                -ldflags="-X github.com/agentgateway/agentgateway/controller/pkg/version.Version=${version} -s -w" \
-                -o "${out}/agentgateway-linux-${arch}" ./controller/cmd/agentgateway
-            done
-            ls -l "${out}"
-      - save_cache:
-          key: go-mod-v1-{{ checksum "go.sum" }}
-          paths:
-            - /home/circleci/go/pkg/mod
-      - persist_to_workspace:
-          root: .
-          paths:
-            - controller/_output/pkg/agentgateway
-
-  # One platform of the data-plane image, built natively on a machine of that
-  # architecture (the Rust build is the whole critical path; emulated it takes
-  # several times longer) and pushed by digest — the orb's build-image job in
-  # its own words, with the version baked into upstream's Dockerfile.
-  build-agentgateway-image:
-    parameters:
-      platform:
-        type: string
-      resource_class:
-        type: string
-    executor: architect/architect
-    resource_class: << parameters.resource_class >>
-    environment:
-      DOCKER_BUILDKIT: "1"
-    steps:
-      - checkout
-      - setup_remote_docker:
-          version: default
-      - attach_workspace:
-          at: .
-      - use-version
-      - run:
-          name: Bake the version into upstream's Dockerfile
-          command: |
-            set -o errexit -o nounset -o pipefail
-            # The proxy takes VERSION and GIT_REVISION as build arguments and refuses
-            # to build without them; the orb's build command passes no build
-            # arguments, so their defaults are set in a copy of upstream's file.
-            version="$(cat .build_version)"
-            sed -e "s|^ARG VERSION\$|ARG VERSION=${version}|" \
-                -e "s|^ARG GIT_REVISION\$|ARG GIT_REVISION=${CIRCLE_SHA1}|" \
-                Dockerfile > /tmp/Dockerfile.agentgateway
-            grep -q "^ARG VERSION=${version}\$" /tmp/Dockerfile.agentgateway
-            grep -q "^ARG GIT_REVISION=${CIRCLE_SHA1}\$" /tmp/Dockerfile.agentgateway
-      - architect/dockerfile-lint:
-          dockerfile: /tmp/Dockerfile.agentgateway
-          mode: warn
-      - architect/image-login-to-registries
-      - architect/image-build-and-push:
-          image: giantswarm/agentgateway
-          platforms: << parameters.platform >>
-          push-by-digest: true
-          dockerfile: /tmp/Dockerfile.agentgateway
-          build-context: .
-          split-china-push: true
-      - persist_to_workspace:
-          root: .
-          paths:
-            - .image-digests
-
-  # Joins the two platforms' digests into one tagged index per registry, then
-  # signs and attests it — the orb's push-to-registries job in merge mode.
-  push-agentgateway-image:
-    executor: architect/architect
-    resource_class: small
-    environment:
-      DOCKER_BUILDKIT: "1"
-    steps:
-      - checkout
-      - setup_remote_docker:
-          version: default
-      - attach_workspace:
-          at: .
-      - use-version
-      - architect/image-login-to-registries
-      - architect/generate-github-token
-      - architect/image-select-registries:
-          split-china-push: true
-      - architect/image-merge-manifests:
-          image: giantswarm/agentgateway
-          platforms: linux/amd64,linux/arm64
-      - architect/image-sign-and-attest:
-          image: giantswarm/agentgateway
-          push: true
-      - save-image-data
-
-  # The controller image: a COPY of the cross-compiled binary onto
-  # chainguard/static per platform, so one multi-platform build is native in
-  # effect (nothing to emulate) and the orb's single-job path builds, pushes,
-  # signs and attests it.
-  push-controller-image:
-    executor: architect/architect
-    resource_class: small
-    environment:
-      DOCKER_BUILDKIT: "1"
-    steps:
-      - checkout
-      - setup_remote_docker:
-          version: default
-      - attach_workspace:
-          at: .
-      - use-version
-      - architect/dockerfile-lint:
-          dockerfile: .circleci/Dockerfile.controller
-          mode: warn
-      - architect/image-login-to-registries
-      - architect/image-build-and-push:
-          image: giantswarm/agentgateway-controller
-          platforms: linux/amd64,linux/arm64
-          dockerfile: .circleci/Dockerfile.controller
-          build-context: controller/_output/pkg/agentgateway
-          split-china-push: true
-      - save-image-data
-
   # Both published images are scanned after the push; a fixable HIGH or
   # CRITICAL finding fails the pipeline (a red release is not consumed — fix
   # the dependency, upstream first, or time-box it in .trivyignore with an
   # expiry when upstream has no fix). The images are public, no login needed.
+  # Trivy runs as a container on the remote Docker host, which a bind mount of
+  # the checkout does not reach, so .trivyignore is copied into the container.
   scan:
     parameters:
       image:
         type: string
-    docker:
-      - image: gsoci.azurecr.io/giantswarm/trivy:0.74.0
+    executor: architect/architect
     resource_class: small
-    shell: /bin/sh -eo pipefail
-    environment:
-      # The database mirrors, tried in order (ghcr rate-limits anonymous pulls).
-      TRIVY_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-db:2,ghcr.io/aquasecurity/trivy-db:2
     steps:
+      - checkout
       - attach_workspace:
           at: .
+      - setup_remote_docker:
+          version: default
       - run:
           name: Scan << parameters.image >>
           command: |
-            ref="gsoci.azurecr.io/<< parameters.image >>:v$(cat .build_version)"
+            set -o errexit -o nounset -o pipefail
+            test -s .build_version
+            ref="gsoci.azurecr.io/<< parameters.image >>:$(cat .build_version)"
             echo "scanning ${ref}"
-            trivy image --severity CRITICAL,HIGH --ignore-unfixed \
-              --ignorefile .trivyignore --exit-code 1 --format table "${ref}"
+            container="$(docker create \
+              --env TRIVY_DB_REPOSITORY=public.ecr.aws/aquasecurity/trivy-db:2,ghcr.io/aquasecurity/trivy-db:2 \
+              gsoci.azurecr.io/giantswarm/trivy:0.74.0 \
+              image --severity CRITICAL,HIGH --ignore-unfixed --ignorefile /.trivyignore \
+              --exit-code 1 --format table "${ref}")"
+            docker cp .trivyignore "${container}:/.trivyignore"
+            docker start --attach "${container}"
 
 workflows:
-  check:
-    when:
-      not: *publish_when
-    jobs:
-      - version:
-          context: architect
-
   publish:
-    when: *publish_when
     jobs:
-      - version:
+      # The data plane: the Rust build is the whole critical path, so each
+      # platform is built natively on a machine of its architecture and the
+      # push job joins the two digests into one signed index.
+      - architect/build-image:
           context: architect
-          filters: *publish_filters
-
-      - build-controller:
-          requires:
-            - version
-          filters: *publish_filters
-      - push-controller-image:
-          context: architect
-          requires:
-            - build-controller
-          filters: *publish_filters
-
-      - build-agentgateway-image:
-          context: architect
-          name: build-agentgateway-image-amd64
+          name: build-image-agentgateway-amd64
+          image: giantswarm/agentgateway-upstream/agentgateway
           platform: linux/amd64
           resource_class: xlarge
-          requires:
-            - version
+          build-args: *agentgateway_build_args
+          split-china-push: true
           filters: *publish_filters
-      - build-agentgateway-image:
+      - architect/build-image:
           context: architect
-          name: build-agentgateway-image-arm64
+          name: build-image-agentgateway-arm64
+          image: giantswarm/agentgateway-upstream/agentgateway
           platform: linux/arm64
           resource_class: arm.xlarge
-          requires:
-            - version
+          build-args: *agentgateway_build_args
+          split-china-push: true
           filters: *publish_filters
-      - push-agentgateway-image:
+      - architect/push-to-registries:
           context: architect
+          name: push-to-registries-agentgateway
+          image: giantswarm/agentgateway-upstream/agentgateway
+          merge-digests: true
+          platforms: linux/amd64,linux/arm64
+          split-china-push: true
+          annotations: *upstream_annotation
           requires:
-            - build-agentgateway-image-amd64
-            - build-agentgateway-image-arm64
+            - build-image-agentgateway-amd64
+            - build-image-agentgateway-arm64
+          filters: *publish_filters
+
+      # The controller: the Dockerfile cross-compiles the Go binary on the
+      # build host and copies it onto chainguard/static, so one multi-platform
+      # build is native in effect. The agentgateway push job is the one that
+      # persists .build_version for the jobs downstream.
+      - architect/push-to-registries:
+          context: architect
+          name: push-to-registries-controller
+          image: giantswarm/agentgateway-upstream/controller
+          dockerfile: .circleci/Dockerfile.controller
+          platforms: linux/amd64,linux/arm64
+          build-args: *controller_build_args
+          persist-build-version: false
+          split-china-push: true
+          annotations: *upstream_annotation
           filters: *publish_filters
 
       - scan:
           name: scan-agentgateway
-          image: giantswarm/agentgateway
+          image: giantswarm/agentgateway-upstream/agentgateway
           requires:
-            - push-agentgateway-image
+            - push-to-registries-agentgateway
           filters: *publish_filters
       - scan:
           name: scan-controller
-          image: giantswarm/agentgateway-controller
+          image: giantswarm/agentgateway-upstream/controller
           requires:
-            - push-controller-image
+            - push-to-registries-controller
+            # for .build_version — only the agentgateway push job persists it
+            - push-to-registries-agentgateway
           filters: *publish_filters
 
       # Releases reach the China mirror through the org's self-hosted runner
-      # there (the images' split-china-push above excludes Aliyun from the
-      # direct push set); dev builds stay on gsoci.
+      # there (split-china-push above keeps Aliyun out of the direct push set);
+      # dev builds stay on gsoci.
       - architect/sync-china-registry:
           context: architect
           name: sync-china-registry-agentgateway
-          image: giantswarm/agentgateway
+          image: giantswarm/agentgateway-upstream/agentgateway
           requires:
-            - push-agentgateway-image
+            - push-to-registries-agentgateway
           filters: *release_filters
       - architect/sync-china-registry:
           context: architect
           name: sync-china-registry-controller
-          image: giantswarm/agentgateway-controller
+          image: giantswarm/agentgateway-upstream/controller
           requires:
-            - push-controller-image
+            - push-to-registries-controller
           filters: *release_filters
+
+  # Pull-request branches: the same builds, nothing pushed. No credentials are
+  # used, so the jobs run without the context.
+  validate:
+    jobs:
+      - architect/build-image:
+          name: validate-agentgateway-amd64
+          image: giantswarm/agentgateway-upstream/agentgateway
+          platform: linux/amd64
+          resource_class: xlarge
+          build-args: *agentgateway_build_args
+          push: false
+          filters: *validate_filters
+      - architect/build-image:
+          name: validate-agentgateway-arm64
+          image: giantswarm/agentgateway-upstream/agentgateway
+          platform: linux/arm64
+          resource_class: arm.xlarge
+          build-args: *agentgateway_build_args
+          push: false
+          filters: *validate_filters
+      - architect/push-to-registries:
+          name: validate-controller
+          image: giantswarm/agentgateway-upstream/controller
+          dockerfile: .circleci/Dockerfile.controller
+          platforms: linux/amd64,linux/arm64
+          build-args: *controller_build_args
+          push: false
+          filters: *validate_filters
