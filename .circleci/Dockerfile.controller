@@ -1,14 +1,38 @@
-# Fork (giantswarm/agentgateway-upstream): upstream's
-# controller/cmd/agentgateway/Dockerfile.agentgateway with the binary chosen by
-# BuildKit's TARGETARCH instead of a GOARCH build argument, so one
-# multi-platform build (.circleci/config.yml, push-controller-image) copies each
-# platform's binary from controller/_output/pkg/agentgateway — the architect
-# orb passes no build arguments. Keep it in step with upstream's file.
+# Fork (giantswarm/agentgateway-upstream): the controller image, built by the
+# architect orb's push-to-registries job (.circleci/config.yml) as one
+# multi-platform build. The builder stage runs on the build host
+# (--platform=$BUILDPLATFORM) and cross-compiles the Go binary for each target
+# platform, so nothing runs emulated; the runtime stage is upstream's
+# controller/cmd/agentgateway/Dockerfile.agentgateway (chainguard/static, user
+# 10101, the same entrypoint). VERSION is the image tag, passed by the pipeline
+# as a build argument and linked into the binary the way upstream's release
+# workflow does it. Keep the runtime stage in step with upstream's file.
+FROM --platform=$BUILDPLATFORM docker.io/library/golang:1.27.1 AS builder
+
+WORKDIR /src
+
+# The module graph first (go.mod replaces the api module with ./api), so the
+# download layer is shared by both target platforms and survives a change of
+# the controller's sources.
+COPY go.mod go.sum ./
+COPY api ./api
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
+
+COPY controller ./controller
+
+ARG TARGETOS
+ARG TARGETARCH
+ARG VERSION
+
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
+      -ldflags "-X github.com/agentgateway/agentgateway/controller/pkg/version.Version=${VERSION} -s -w" \
+      -o /out/agentgateway ./controller/cmd/agentgateway
+
 FROM cgr.dev/chainguard/static
 
-ARG TARGETARCH
-
-COPY agentgateway-linux-${TARGETARCH} /usr/local/bin/agentgateway
+COPY --from=builder /out/agentgateway /usr/local/bin/agentgateway
 
 USER 10101
 
