@@ -1,0 +1,15 @@
+# Fork (giantswarm/agentgateway-upstream): upstream's
+# controller/cmd/agentgateway/Dockerfile.agentgateway with the binary chosen by
+# BuildKit's TARGETARCH instead of a GOARCH build argument, so one
+# multi-platform build (.circleci/config.yml, push-controller-image) copies each
+# platform's binary from controller/_output/pkg/agentgateway — the architect
+# orb passes no build arguments. Keep it in step with upstream's file.
+FROM cgr.dev/chainguard/static
+
+ARG TARGETARCH
+
+COPY agentgateway-linux-${TARGETARCH} /usr/local/bin/agentgateway
+
+USER 10101
+
+ENTRYPOINT ["/usr/local/bin/agentgateway"]

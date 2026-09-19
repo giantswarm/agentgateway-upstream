@@ -181,7 +181,7 @@ jobs:
             go build ./...
             if [ "${DRY_RUN}" != true ]; then
               git push --force-with-lease="refs/heads/${LINE_BRANCH}:${HEAD_SHA}" origin "HEAD:refs/heads/${LINE_BRANCH}"
-              echo "- pushed \`${LINE_BRANCH}\` (\`${HEAD_SHA:0:12}\` → \`$(git rev-parse --short HEAD)\`); the branch run tests it and the publish workflow builds the dev build" >> "$GITHUB_STEP_SUMMARY"
+              echo "- pushed \`${LINE_BRANCH}\` (\`${HEAD_SHA:0:12}\` → \`$(git rev-parse --short HEAD)\`); the branch run tests it and the CircleCI pipeline publishes the dev build" >> "$GITHUB_STEP_SUMMARY"
             fi
             exit 0
           fi
