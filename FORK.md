@@ -33,7 +33,7 @@ the branch that was not a pull request or a re-pin), then adding the fork's file
 | Upstream commit | **`main` @ `c1d24607`** (2026-09-14, "build(deps): bump the cargo-weekly group with 18 updates (#3454)"; 118 commits past v1.5.0). A `main` commit, not a release tag: upstream has released nothing since v1.5.0 (2026-08-27), and the Substrate line's pin needs what `main` carries (below). The line returns to a release tag at the first upstream release that contains `9f9744cf` (v1.6.0 by upstream's cadence). |
 | Why this one | The Substrate line (`giantswarm/substrate`) is pinned to kagent-dev/substrate **v0.0.29**, whose chart declares the egress actor check as the frontend policy `substrateEgressActorResolution` of agentgateway#3318 and whose `atenet-router` speaks the substrate ingress protocol of agentgateway#3409/#3410/#3428 — upstream kagent-dev/substrate pins a nightly of upstream commit `9f9744cf` for it ([kagent-dev/substrate#28](https://github.com/kagent-dev/substrate/pull/28)). Any `main` commit ≥ `9f9744cf` serves; the line takes `main`'s head of the day the three lines moved together (agentgateway → Substrate → kagent, giantswarm/giantswarm#37742). The packaging chart `giantswarm/agentgateway` follows the same release for the platform's controller and data plane (see "Consumers"). |
 | When it moves | with the consumers, proven in agentlab first — see "Re-pin". Not on a schedule. Previous pin: v1.5.0 (2026-09-10 → 2026-09-14, releases `v1.5.1-gs.1`–`gs.3`). |
-| Derived how | `git describe --tags --abbrev=0 --match 'v[0-9]*' --exclude '*-*' giantswarm` with upstream's tags fetched names the nearest upstream release **below** the pin — v1.5.0 — so the dev base and the release base stay `1.5.1` while the pin is a `main` commit; the line's own tags carry a pre-release suffix and are excluded. The pin itself is `git merge-base giantswarm main` (the mirror). The workflows compute both, nothing records them twice. |
+| Derived how | The pin itself is `git merge-base giantswarm main` (the mirror — after a re-pin onto an upstream commit newer than the last mirror run, `main` lags the pin until the next weekly run and the merge-base is the older commit; this row is authoritative). The upstream release it corresponds to is `git describe --tags --abbrev=0 --match 'v[0-9]*' --exclude '*-*' "$(git merge-base giantswarm main)"` with upstream's tags fetched — the nearest upstream release at or below the pin, v1.5.0 today. `git describe` runs at the merge-base, not at `giantswarm`, so the line's own stable tags (`v2.0.0`, …; see "Publishing") never count. The line's versions are decoupled from upstream's; the pin is documented here and stamped on every published index as the annotation `io.giantswarm.upstream.version`. |
 
 ### Convergence with the Substrate line
 
@@ -88,8 +88,11 @@ itself (`git rebase` drops already-applied patches). It is the one sanctioned re
      `git push --force-with-lease=refs/heads/giantswarm origin HEAD:giantswarm` and close the pull request. **Do not
      merge it** — the line is a rebased branch; a merge would fold the old pin back in.
    - `dry_run: true` does everything except the pushes; the run summary shows the outcome.
-3. Update this file (pin, carried patches) in a pull request, and the agentgateway rows of #37742.
-4. Tag a release (`vX.Y.Z-gs.N`), move the consumers to it (see "Consumers"), prove it in agentlab — for a move the
+3. Update this file (pin, carried patches) and the upstream-pin annotation in `.circleci/config.yml`
+   (`index:io.giantswarm.upstream.version=<pin>`, stamped on every published index) in a pull request, and the
+   agentgateway rows of #37742.
+4. Tag a release (`vX.Y.Z` — a re-pin is at least a minor bump, see "Publishing"), move the consumers to it (see
+   "Consumers"), prove it in agentlab — for a move the
    Substrate line depends on, the release is cut once `ci-ok` is green on the exact head (the Substrate chart's
    publish resolves the release image by digest) and its pipeline is green (the images are pushed before the scan,
    so a red release exists in the registry and is not consumed), and the agentlab proof runs on the three lines'
@@ -130,61 +133,60 @@ git push --force-with-lease=refs/heads/giantswarm origin HEAD:giantswarm
 ## Publishing
 
 `.circleci/config.yml` publishes the line's two images to the org's registries — `gsoci.azurecr.io` first, the China
-mirror for releases — on every push to `giantswarm` (a dev build) and on every `vX.Y.Z-gs.N` tag (a release); nothing
-is published from GitHub Actions or by hand, and nothing pushes to ghcr.io (the line published there from a fork
-workflow until 2026-09-19; that publication was a mistake and its retagger copies into gsoci are retired,
-[giantswarm/giantswarm#37874](https://github.com/giantswarm/giantswarm/issues/37874)). Both images are built for
-linux/amd64 and linux/arm64, the data plane natively on a machine of each architecture and merged into one index, the
-controller as one multi-platform build of a `COPY`-only Dockerfile from cross-compiled binaries; both are signed and
-attested (SLSA provenance, SPDX SBOM) with the org's CircleCI identity by the architect orb's commands and scanned
-after the push. The pipeline runs the orb's *commands*, not its stock jobs: those take the version from `gitsemver`,
-which knows stable and `-rc.N` tags only and would publish a `-gs.N` release under a dev version.
+mirror for releases — on every push to `giantswarm` (a dev build) and on every release tag (`vX.Y.Z`, or `vX.Y.Z-rc.N`
+for a release candidate); nothing is published from GitHub Actions or by hand, and nothing pushes to ghcr.io (the
+line published there from a fork workflow until 2026-09-19; that publication was a mistake and its retagger copies
+into gsoci are retired, [giantswarm/giantswarm#37874](https://github.com/giantswarm/giantswarm/issues/37874)). The
+pipeline is the architect orb's stock jobs (`giantswarm/architect@10.6.0`, the first release with `build-args`) and
+nothing else: `build-image` builds one platform natively on a machine of that architecture and pushes it by digest,
+`push-to-registries` computes the version (`gitsemver`), builds or merges, tags, signs and attests (SLSA provenance,
+SPDX SBOM) with the org's CircleCI identity, `sync-china-registry` mirrors a release; the fork adds a Trivy scan of
+each image after its push. Both images are built for linux/amd64 and linux/arm64.
 
 | Artifact | Name |
 |---|---|
-| Data-plane proxy | `gsoci.azurecr.io/giantswarm/agentgateway:<tag>` — linux/amd64 + linux/arm64 from the root `Dockerfile` (Rust 1.98 on `chainguard/glibc-dynamic`, the UI embedded), each platform built natively and merged into one index; `VERSION` and `GIT_REVISION` are baked into a copy of the Dockerfile as the build arguments' defaults, because the orb passes none |
-| Controller | `gsoci.azurecr.io/giantswarm/agentgateway-controller:<tag>` — the Go binary per platform on `chainguard/static` (`.circleci/Dockerfile.controller`: upstream's `Dockerfile.agentgateway` selecting the binary by `TARGETARCH`) |
+| Data-plane proxy | `gsoci.azurecr.io/giantswarm/agentgateway-upstream/agentgateway:<version>` — upstream's root `Dockerfile` unchanged (Rust 1.98 on `chainguard/glibc-dynamic`, the UI embedded); each platform built natively by `build-image` (`xlarge` / `arm.xlarge`) and joined into one index by `push-to-registries` (`merge-digests`); the build arguments `VERSION=${DOCKER_IMAGE_TAG}` and `GIT_REVISION=${CIRCLE_SHA1}` come from the job (`build-args`) |
+| Controller | `gsoci.azurecr.io/giantswarm/agentgateway-upstream/controller:<version>` — `.circleci/Dockerfile.controller`: a multi-stage build that cross-compiles the Go binary on the build host (`CGO_ENABLED=0`, upstream's ldflags, `VERSION=${DOCKER_IMAGE_TAG}`) and copies it onto `chainguard/static` (user 10101, upstream's entrypoint), as one multi-platform `push-to-registries` build — nothing runs emulated |
 
-**The names are the flattened ones the consumers already pull** (the packaging chart, the connectivity chart and the
-Substrate chart name them; retagger copied the ghcr releases there until the first native release). The same two
-repositories also receive retagger's copies of upstream's own releases (`cr.agentgateway.dev/{agentgateway,controller}`,
-bare `vX.Y.Z` tags, `>= v1.2.0`); the line's `-gs.N` and dev tags never collide with them as long as both keep their tag
-shapes. The alternative — the line's own nested path `gsoci.azurecr.io/giantswarm/agentgateway-upstream/<image>`, the
-kagent and Substrate lines' shape — would have moved every consumer for no gain; decided 2026-09-19 with #37874.
+**The names are the line's own**, nested under the repository's name like the kagent (`giantswarm/kagent-upstream/…`)
+and Substrate (`giantswarm/substrate/…`) lines. The flattened repositories `gsoci.azurecr.io/giantswarm/agentgateway`
+and `…/agentgateway-controller` receive nothing from here any more: they hold retagger's copies of **upstream's**
+releases (`cr.agentgateway.dev`, bare `vX.Y.Z` tags) and the line's coupled releases up to `v1.5.1-gs.5`, which were
+published there. Consumers move to the new names in their own pull requests (see "Consumers").
 
-Not published from here: the charts (upstream's, vendored by the packaging chart from `cr.agentgateway.dev`; the fork
-workflow's chart publication ended with it — no consumer read it), the `agentgateway` and `agctl` binaries, the Windows
-image, the s390x image (use upstream's release for those), and the OpenVEX attestation upstream attaches to the
-controller (the orb attaches provenance and SBOM instead).
+Not published from here: the charts (upstream's, vendored by the packaging chart from `cr.agentgateway.dev`), the
+`agentgateway` and `agctl` binaries, the Windows image, the s390x image (use upstream's release for those), and the
+OpenVEX attestation upstream attaches to the controller (the orb attaches provenance and SBOM instead).
 
-**Versions.** Image tags keep upstream's **`v` prefix** (`v1.5.0` is what the packaging chart's `appVersion`, the
-connectivity chart's `proxy.image.tag`, the Substrate chart's `images.agentgateway` and the retagger rules carry); the
-version inside the binaries is bare, as upstream builds it. The sibling Substrate and kagent lines tag their images
-**without** the `v` (ko's convention) — two deliberate choices, do not "fix" one to match the other.
+**Versions.** The line's versions are its own, decoupled from upstream's, as the RFCs
+[Semantic Versioning of Upstream Software](https://github.com/giantswarm/rfc/tree/main/semantic-versioning-of-upstream-software)
+and [Semver Based Automatic Upgrades](https://github.com/giantswarm/rfc/tree/main/semver-based-automatic-upgrades)
+("Tagging schema") lay down. The upstream version is the pin (see "Pin"), stamped on every published index as the
+annotation `io.giantswarm.upstream.version` (`main@c1d24607` today; the value lives in `.circleci/config.yml` and
+moves with every re-pin) — `oras manifest fetch <image> | jq .annotations` reads it. Image tags are bare semver: the
+git tag carries the `v`, the image tag does not (the orb's convention, and the sibling lines').
 
-- Dev build, on every push to `giantswarm`: `v` + `gitsemver get` of the commit — base = the next patch of the nearest
-  upstream release reachable (pre-release tags, the line's own included, are skipped; upstream's tags are fetched into
-  the checkout first, this repository does not carry them), then gitsemver's dev pre-release part naming the branch,
-  the committer time and the commit — the schema of the gitsemver in the orb's architect image, today
-  `v1.5.1-dev.giantswarm.<YYYY-MM-DD>.<HH-MM-SS>.h<sha7>` (gitsemver v3 emits `-r<branch-hash>t<YYYYMMDDHHMMSS>h<sha7>`
-  instead; both validate as dev builds and the orb's registry rules recognise both). A Flux consumer of the channel uses
-  a `semverFilter` that pins the width of every field (gitsemver's README); exact pins name the full string. Nothing in
-  the fleet consumes dev builds.
-- Release, on a tag `vX.Y.Z-gs.N` where `X.Y.Z` is upstream's **next** version (the dev base) and `N` counts the
-  line's releases of that pin: `v1.5.1-gs.1`. Ordering by semver: `1.5.1-<dev> < 1.5.1-gs.1 < 1.5.1`, so a dev build
-  never outranks a release, a fork release never outranks the upstream version it anticipates, and the switch to an
-  upstream tag one day is a range change, not a rename. The fleet consumes releases only (see "Consumers"). Only tags
-  of this shape run the pipeline; a tag of any other shape fails its `version` job.
-- A dev build of another branch (a proof before a merge) or a one-off version: an API-triggered pipeline with the
-  parameters `publish: true` and, for a one-off, `version` (bare semver). A push to any other branch runs the `version`
-  job alone (the `check` workflow): it proves the version step on the branch and gives the pull request one green
-  CircleCI workflow — the merge tooling reads a pipeline without workflows as one that has not started yet.
+- **Release**, on a git tag `vX.Y.Z` (or `vX.Y.Z-rc.N` for a release candidate): image tag `X.Y.Z` (`X.Y.Z-rc.N`).
+  The first decoupled release is **`2.0.0`**, the next major above the last coupled release (`v1.5.1-gs.5`), so a
+  semver range that followed the line keeps ordering correctly and the break with the coupled scheme is visible. A
+  re-pin is at least a minor bump, a carried patch or a pipeline change a patch bump, a change consumers have to
+  follow a major. The fleet consumes releases only (see "Consumers"); a tag of any other shape runs no pipeline.
+- **Dev build**, on every push to `giantswarm`: gitsemver's dev version of the commit — the next patch above the
+  nearest stable tag reachable from it (with none reachable, as before `v2.0.0`, it starts from `0.0.0`; the line's
+  `-gs.N` tags are pre-releases and do not count), then the dev pre-release part naming the branch, the committer time
+  and the commit, in the schema of the gitsemver in the orb's architect image. A Flux consumer of the channel uses a
+  `semverFilter` that pins the width of every field (the RFC's "How to select dev builds"). Nothing in the fleet
+  consumes dev builds.
+- **Any other branch** runs the same builds with `push: false` (the `validate` workflow): the Dockerfiles and the
+  build arguments are proven on the pull request, nothing is pushed. A dev build of a change is its merge to
+  `giantswarm`; there is no publish of another branch.
 
 **Digests.** Every push job prints the digest of each pushed index; consumers pin by tag and verify by digest
 (`crane digest`, and `cosign verify --certificate-oidc-issuer https://oidc.circleci.com --certificate-identity-regexp
 '^https://circleci\\.com/api/v2/projects/[a-f0-9-]+/pipeline-definitions/[a-f0-9-]+$'` for the signature). Release digests
 are recorded here (releases up to v1.5.1-gs.4 were published to `ghcr.io/giantswarm/agentgateway-upstream` by the fork
-workflow and copied to the gsoci names by retagger; their ghcr originals are not maintained):
+workflow and copied to the flattened gsoci names by retagger, v1.5.1-gs.5 to the flattened names from CircleCI; their
+ghcr originals are not maintained):
 
 | Release | Pin | Images and charts |
 |---|---|---|
@@ -194,8 +196,7 @@ workflow and copied to the gsoci names by retagger; their ghcr originals are not
 | **v1.5.1-gs.2** (2026-09-11, tag on `4d34ff55` = v1.5.0 + the grpc/x/crypto bump + agentgateway#3237's CONNECT-time actor egress authorization + the resuming-actor admission; [run 34544951234](https://github.com/giantswarm/agentgateway-upstream/actions/runs/34544951234)) | v1.5.0 | `agentgateway:v1.5.1-gs.2` `sha256:766f68bc1ec30c122615cd7d35d15ecada873f4a2623ff1b61fff67724145132` · `controller:v1.5.1-gs.2` `sha256:f0c7539b1b117ae4883f5de713f417d39b813c0f772c9d66c3890b1ba825ebfa` (both linux/amd64 + linux/arm64, cosign-signed, Trivy clean) · charts `agentgateway:1.5.1-gs.2` `sha256:af5b06c75db1c0b65fa79fd77a74ea5471c4f57c577fb39063b5e96761b7d1f2`, `agentgateway-crds:1.5.1-gs.2` `sha256:6bc86f889a512f06f12129580307704c66a59370081106561c5901b543cdb25f`, `agentgateway-standalone:1.5.1-gs.2` `sha256:c6868e6a2bd16e36dc3edb5769ad892728cda8378e79f6fbfa09755202c08c48` (the `v1.5.1-gs.2` chart tags carry the same content under a second manifest) |
 | **v1.5.1-gs.1** (2026-09-10, tag on `5a5d5d8b` = v1.5.0 + the grpc/x/crypto bump; [run 34541814717](https://github.com/giantswarm/agentgateway-upstream/actions/runs/34541814717)) | v1.5.0 | `agentgateway:v1.5.1-gs.1` `sha256:e100bc9aea668ce0cc1c178057a34f1794f24a168d98d6da1144cfd4d4b0b7ee` · `controller:v1.5.1-gs.1` `sha256:78225d54d6e624582dc208eaa80fa89339da0346395bf67e38f40f5ae04b62e8` (both linux/amd64 + linux/arm64, cosign-signed, Trivy clean) · charts `agentgateway:1.5.1-gs.1` `sha256:60769399af5cfb479764b14054edc133a2c174d8762e726e9b905c3406230c3e`, `agentgateway-crds:1.5.1-gs.1` `sha256:d12a7166cdd8924cdcce632693896187050089bcda42cdc1ef704dd93f48c4da`, `agentgateway-standalone:1.5.1-gs.1` `sha256:08c33dcdb78521490a4075c4c9acd4fc911b0d093f0b34973d398bae90d0d79f` (the `v1.5.1-gs.1` chart tags carry the same content under a second manifest) |
 
-**Scans.** Both own images are scanned with Trivy (HIGH and CRITICAL, fixable only) after the push (`scan-agentgateway`,
-`scan-controller`). A fixable finding fails the pipeline — the images exist in the registry by then, a red release is
+**Scans.** Both own images are scanned with Trivy (HIGH and CRITICAL, fixable only) after the push (`scan-agentgateway`, `scan-controller`: the repo-owned `scan` job runs Trivy as a container on the job's remote Docker host, with `.trivyignore` copied into it). A fixable finding fails the pipeline — the images exist in the registry by then, a red release is
 not consumed: bump the dependency (upstream first) or, when upstream has no fix, add a time-boxed entry to `.trivyignore` (`CVE-… exp:YYYY-MM-DD # reason, tracking
 issue`) — an expired entry fails again and is re-triaged, not extended. Trivy reports four Istio advisories
 (CVE-2019-14993, CVE-2021-39155, CVE-2021-39156, CVE-2022-23635) against `istio.io/istio`, which the controller imports at
@@ -214,10 +215,10 @@ for a line that rebuilds on re-pins and patches; a persisted cargo cache is an i
 
 | Consumer | Where the pin lives | Selects |
 |---|---|---|
-| [giantswarm/substrate](https://github.com/giantswarm/substrate) (the Substrate line) | `.github/workflows/publish.yaml` `AGENTGATEWAY_IMAGE`, stamped into the chart's `images.agentgateway` at package time | the line's release image for `atenet-router` and `atenet-egress` |
-| [giantswarm/retagger](https://github.com/giantswarm/retagger) | `images/renamed-agentgateway.yaml` | copies **upstream's** releases (`cr.agentgateway.dev`) into the same two gsoci repositories, next to the line's tags; its copies of the line's ghcr releases (up to v1.5.1-gs.4) are retired with the first native release ([giantswarm/retagger#1238](https://github.com/giantswarm/retagger/issues/1238)) |
-| [giantswarm/agentgateway](https://github.com/giantswarm/agentgateway) (the packaging chart) | `sync/patches/values/values.yaml` → `helm/agentgateway/values.yaml`: `controller.image.tag`, `proxy.image.tag` (Renovate capped to `-gs.` tags) | a release from gsoci; its chart stays upstream's, vendored from `cr.agentgateway.dev` until the line carries a chart patch (then `vendir.yml` points at this registry's charts) |
-| [giantswarm/agent-platform](https://github.com/giantswarm/agent-platform) | the meta chart follows the packaging chart through `components.agentgateway.versionRange`; the connectivity chart pins the data-plane image in `agentgateway.proxy.image.tag` (rendered into `AgentgatewayParameters`) | the same release |
+| [giantswarm/substrate](https://github.com/giantswarm/substrate) (the Substrate line) | `.github/workflows/publish.yaml` `AGENTGATEWAY_IMAGE`, stamped into the chart's `images.agentgateway` at package time | the line's release `gsoci.azurecr.io/giantswarm/agentgateway-upstream/agentgateway:<version>` for `atenet-router` and `atenet-egress`; the move from the flattened name and its `v`-prefixed tag is the Substrate line's own pull request |
+| [giantswarm/retagger](https://github.com/giantswarm/retagger) | `images/renamed-agentgateway.yaml` | copies **upstream's** releases (`cr.agentgateway.dev`) into the flattened `gsoci.azurecr.io/giantswarm/agentgateway` and `…/agentgateway-controller`; nothing of the line's (its copies of the line's ghcr releases are retired, [giantswarm/retagger#1238](https://github.com/giantswarm/retagger/issues/1238)) |
+| [giantswarm/agentgateway](https://github.com/giantswarm/agentgateway) (the packaging chart) | `sync/patches/values/values.yaml` → `helm/agentgateway/values.yaml`: `controller.image` and `proxy.image` (repository and tag; Renovate follows the stable tags) | a release from `gsoci.azurecr.io/giantswarm/agentgateway-upstream/{controller,agentgateway}` — the move from the flattened names and the `-gs.` cap is the packaging chart's own pull request; its chart stays upstream's, vendored from `cr.agentgateway.dev` until the line carries a chart patch (then `vendir.yml` points at this registry's charts) |
+| [giantswarm/agent-platform](https://github.com/giantswarm/agent-platform) | the meta chart follows the packaging chart through `components.agentgateway.versionRange`; the connectivity chart pins the data-plane image in `agentgateway.proxy.image` (repository and tag, rendered into `AgentgatewayParameters`) | the same release |
 
 ## Contributing
 
@@ -232,10 +233,7 @@ for a line that rebuilds on re-pins and patches; a persisted cargo cache is an i
 - **Experiments**: your own personal fork. Branches here exist to become pull requests.
 - **What CI runs on a pull request**: upstream's `Branch` workflow — proxy tests (Linux, with the Keycloak/JWKS
   validation dependencies), proxy lint (schema generation, clippy), UI lint and Playwright, controller tests and
-  lint, controller e2e and both conformance suites on kind — plus `govulncheck`; `ci-ok` is required. The CircleCI pipeline
-  publishes only from `giantswarm` and release tags (an API-triggered pipeline with `publish: true` builds a branch);
-  on a pull-request branch it runs the `version` job alone. Expect an hour: the Rust lanes build on 4-vCPU hosted runners with caches that
+  lint, controller e2e and both conformance suites on kind — plus `govulncheck`; `ci-ok` is required. The CircleCI pipeline publishes only from `giantswarm` and release tags; on a pull-request branch it runs the `validate` workflow — the same image builds with `push: false`, about as long as the Rust lanes. Expect an hour: the Rust lanes build on 4-vCPU hosted runners with caches that
   only pushes to `giantswarm` roll forward.
 - Upstream's `release.yml` and `nightly.yml` cannot be dispatched here (their `workflow_dispatch` triggers are
-  removed on this branch; they would push under upstream's names to ghcr.io). Do not push tags other than
-  `vX.Y.Z-gs.N` releases.
+  removed on this branch; they would push under upstream's names to ghcr.io). Do not push tags other than the line's releases (`vX.Y.Z`, `vX.Y.Z-rc.N`; see "Publishing").
