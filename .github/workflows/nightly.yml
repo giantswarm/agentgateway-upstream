@@ -1,9 +1,12 @@
 name: Nightly Release
 
+# Fork (giantswarm/agentgateway-upstream): schedule only, no workflow_dispatch.
+# The schedule's jobs are skipped here by upstream's repository guard; a
+# dispatch would bypass it and call release.yml, which pushes to ghcr.io — the
+# line publishes from .circleci/config.yml to gsoci.azurecr.io (FORK.md).
 on:
   schedule:
     - cron: '0 2 * * *'
-  workflow_dispatch: {}
 
 permissions:
   actions: read
