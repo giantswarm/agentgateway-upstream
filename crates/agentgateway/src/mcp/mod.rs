@@ -417,6 +417,12 @@ pub enum ClientError {
 	General(Arc<crate::http::Error>),
 	#[error("http request failed: {0}")]
 	Proxy(#[from] ProxyError),
+	/// The upstream's response body exceeded the frontend's buffer
+	/// (`frontend.http.maxBufferSize`). Names the limit and, when the upstream
+	/// declared one, the body's Content-Length (the encoded size for a compressed
+	/// body), so the caller learns what was refused and which knob bounds it.
+	#[error("upstream response body{} exceeds the maximum buffer size of {limit} bytes", .size.map(|s| format!(" of {s} bytes")).unwrap_or_default())]
+	ResponseTooLarge { limit: usize, size: Option<u64> },
 }
 
 impl ClientError {
