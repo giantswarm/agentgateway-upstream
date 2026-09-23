@@ -1080,7 +1080,8 @@ mod tests {
 		let second = mount.join("..2026_09_23_14_45_00.000000001");
 		fs_err::create_dir(&second).unwrap();
 		fs_err::write(second.join("credential-bundle.pem"), "new").unwrap();
-		std::os::unix::fs::symlink("..2026_09_23_14_45_00.000000001", mount.join("..data_tmp")).unwrap();
+		std::os::unix::fs::symlink("..2026_09_23_14_45_00.000000001", mount.join("..data_tmp"))
+			.unwrap();
 		fs_err::rename(mount.join("..data_tmp"), mount.join("..data")).unwrap();
 		fs_err::remove_dir_all(&first).unwrap();
 
@@ -1090,7 +1091,10 @@ mod tests {
 			.unwrap();
 		assert_eq!(manager.cached(&resource), Some(Bytes::from("new")));
 		assert_eq!(
-			manager.fetch_and_wait(ResourceRef::File(file.clone())).await.unwrap(),
+			manager
+				.fetch_and_wait(ResourceRef::File(file.clone()))
+				.await
+				.unwrap(),
 			Bytes::from("new")
 		);
 
@@ -1098,7 +1102,8 @@ mod tests {
 		let third = mount.join("..2026_09_24_14_45_00.000000001");
 		fs_err::create_dir(&third).unwrap();
 		fs_err::write(third.join("credential-bundle.pem"), "newer").unwrap();
-		std::os::unix::fs::symlink("..2026_09_24_14_45_00.000000001", mount.join("..data_tmp")).unwrap();
+		std::os::unix::fs::symlink("..2026_09_24_14_45_00.000000001", mount.join("..data_tmp"))
+			.unwrap();
 		fs_err::rename(mount.join("..data_tmp"), mount.join("..data")).unwrap();
 		fs_err::remove_dir_all(&second).unwrap();
 		tokio::time::timeout(Duration::from_secs(10), changes.changed())
@@ -1133,10 +1138,12 @@ mod tests {
 		// follows it.
 		fs_err::write(&file, "new").unwrap();
 		assert_eq!(
-			manager.fetch_and_wait(ResourceRef::File(file.clone())).await.unwrap(),
+			manager
+				.fetch_and_wait(ResourceRef::File(file.clone()))
+				.await
+				.unwrap(),
 			Bytes::from("new")
 		);
 		assert_eq!(manager.cached(&resource), Some(Bytes::from("new")));
 	}
-
 }
