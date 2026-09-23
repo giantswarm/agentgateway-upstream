@@ -283,7 +283,11 @@ function step_preload_images() {(
 
 function step_warm_test() {
   if [[ "${TEST_MODE}" == "e2e" ]]; then
-    CGO_ENABLED=0 go test -tags=e2e -exec=true -toolexec=./tools/go-compile-without-link -vet=off ./controller/test/e2e
+    # An absolute path: the go command runs asm actions from the package's own
+    # directory, so a relative -toolexec breaks on a cold build cache as soon as
+    # a dependency with assembly files (e.g. github.com/modern-go/reflect2) is
+    # compiled.
+    CGO_ENABLED=0 go test -tags=e2e -exec=true -toolexec="${REPO_ROOT}/tools/go-compile-without-link" -vet=off ./controller/test/e2e
   elif [[ "${TEST_MODE}" == "conformance" ]]; then
     # TODO
     :
