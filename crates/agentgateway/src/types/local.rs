@@ -85,17 +85,21 @@ impl NormalizedLocalConfig {
 		// Avoid shell expanding the comment for schema. Probably there are better ways to do this!
 		let s = s.replace("# yaml-language-server: $schema", "#");
 		let s = shellexpand::full(&s)?;
-		let local_config: LocalConfig = serdes::yaml::from_str(&s)?;
+		// Serde hooks resolve backend TLS file references while the config is
+		// parsed, with a files-only fetcher; recorded here, those files become this
+		// load's managed dependencies below.
+		let (local_config, parse_reads) = crate::resource_manager::record_files_only_reads(|| {
+			serdes::yaml::from_str::<LocalConfig>(&s)
+		});
+		let local_config = local_config?;
 		let mut registration_config = config.clone();
 		let registration_policy = Arc::new(config.budget_policy.registration_policy());
 		registration_config.budget_policy = registration_policy.clone();
 		let scope = resources.scope_full_computation();
-		let result = Box::pin(convert(
-			resources,
-			gateway_name,
-			&registration_config,
-			local_config,
-		))
+		let result = Box::pin(async {
+			resources.register_file_dependencies(parse_reads).await?;
+			convert(resources, gateway_name, &registration_config, local_config).await
+		})
 		.await;
 		scope.finish(result.is_ok());
 		let mut t = result?;
