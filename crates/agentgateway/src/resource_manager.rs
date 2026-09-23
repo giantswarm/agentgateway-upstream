@@ -360,6 +360,18 @@ impl ResourceManager {
 	async fn fetch_and_wait_normalized(&self, resource: ResourceRef) -> anyhow::Result<Bytes> {
 		if let ResourceRef::File(path) = &resource {
 			self.watch_file(path)?;
+			// A file is read from disk on every managed fetch rather than served
+			// from the cache: a config reload is triggered by one changed resource
+			// and must see the current content of every other file too. A
+			// Kubernetes projected volume rotates its certificate by swapping the
+			// `..data` symlink, and when that rotation reaches this process without
+			// an event of its own (or after the watch on the replaced inode was
+			// lost), the cache would hand the reload the expired bytes. Reading a
+			// local file is cheap; the cache keeps the last content for the change
+			// detection of the refresh path.
+			let FetchResult { content, next } = self.fetch(&resource).await?;
+			self.store(resource, content.clone(), next);
+			return Ok(content);
 		}
 		if let Some(content) = self.cached(&resource) {
 			return Ok(content);
@@ -1031,4 +1043,100 @@ mod tests {
 			"failed refresh should reschedule sooner than the stale next_refresh from the last success"
 		);
 	}
+
+	/// A Kubernetes projected volume (a `podCertificate` or `clusterTrustBundle`
+	/// source) rotates its files by writing a new `..<timestamp>` directory and
+	/// swapping the `..data` symlink; the file path stays, its inode changes. A
+	/// managed file resource must see the rotation through the real watcher and
+	/// publish the new content.
+	#[tokio::test]
+	async fn projected_volume_rotation_refreshes_and_notifies() {
+		let dir = tempfile::tempdir().unwrap();
+		let mount = dir.path();
+		let first = mount.join("..2026_09_22_14_45_00.000000001");
+		fs_err::create_dir(&first).unwrap();
+		fs_err::write(first.join("credential-bundle.pem"), "old").unwrap();
+		std::os::unix::fs::symlink("..2026_09_22_14_45_00.000000001", mount.join("..data")).unwrap();
+		std::os::unix::fs::symlink(
+			"..data/credential-bundle.pem",
+			mount.join("credential-bundle.pem"),
+		)
+		.unwrap();
+		let file = mount.join("credential-bundle.pem");
+
+		let manager = ResourceManager::new(test_client()).unwrap();
+		let resources = ResourceFetcher::managed(manager.clone());
+		let resource = normalize_resource(ResourceRef::File(file.clone())).unwrap();
+		let content = scoped(&resources, || async {
+			resources.fetch(ResourceRef::File(file.clone())).await
+		})
+		.await
+		.unwrap();
+		assert_eq!(content, Bytes::from("old"));
+		let mut changes = manager.subscribe_changes();
+
+		// kubelet's atomic writer: new timestamped dir, a temporary symlink renamed
+		// over `..data`, then the old dir removed.
+		let second = mount.join("..2026_09_23_14_45_00.000000001");
+		fs_err::create_dir(&second).unwrap();
+		fs_err::write(second.join("credential-bundle.pem"), "new").unwrap();
+		std::os::unix::fs::symlink("..2026_09_23_14_45_00.000000001", mount.join("..data_tmp")).unwrap();
+		fs_err::rename(mount.join("..data_tmp"), mount.join("..data")).unwrap();
+		fs_err::remove_dir_all(&first).unwrap();
+
+		tokio::time::timeout(Duration::from_secs(10), changes.changed())
+			.await
+			.expect("the rotation must publish a resource change")
+			.unwrap();
+		assert_eq!(manager.cached(&resource), Some(Bytes::from("new")));
+		assert_eq!(
+			manager.fetch_and_wait(ResourceRef::File(file.clone())).await.unwrap(),
+			Bytes::from("new")
+		);
+
+		// And a second rotation, after the watch was re-registered on the new inode.
+		let third = mount.join("..2026_09_24_14_45_00.000000001");
+		fs_err::create_dir(&third).unwrap();
+		fs_err::write(third.join("credential-bundle.pem"), "newer").unwrap();
+		std::os::unix::fs::symlink("..2026_09_24_14_45_00.000000001", mount.join("..data_tmp")).unwrap();
+		fs_err::rename(mount.join("..data_tmp"), mount.join("..data")).unwrap();
+		fs_err::remove_dir_all(&second).unwrap();
+		tokio::time::timeout(Duration::from_secs(10), changes.changed())
+			.await
+			.expect("the second rotation must publish a resource change")
+			.unwrap();
+		assert_eq!(manager.cached(&resource), Some(Bytes::from("newer")));
+	}
+
+	/// A reload triggered by another resource must not hand a policy the cached,
+	/// expired bytes of a file that rotated without an event of its own reaching
+	/// this process: a managed fetch of a file reads the disk.
+	#[tokio::test]
+	async fn managed_file_fetch_reads_the_current_content_without_a_watch_event() {
+		let dir = tempfile::tempdir().unwrap();
+		let file = dir.path().join("credential-bundle.pem");
+		fs_err::write(&file, "old").unwrap();
+
+		let manager = ResourceManager::new(test_client()).unwrap();
+		let resources = ResourceFetcher::managed(manager.clone());
+		let resource = normalize_resource(ResourceRef::File(file.clone())).unwrap();
+		let content = scoped(&resources, || async {
+			resources.fetch(ResourceRef::File(file.clone())).await
+		})
+		.await
+		.unwrap();
+		assert_eq!(content, Bytes::from("old"));
+		assert_eq!(manager.cached(&resource), Some(Bytes::from("old")));
+
+		// Replace the content and fetch again at once, before any watcher could
+		// have refreshed the cache: the fetch answers the disk, and the cache
+		// follows it.
+		fs_err::write(&file, "new").unwrap();
+		assert_eq!(
+			manager.fetch_and_wait(ResourceRef::File(file.clone())).await.unwrap(),
+			Bytes::from("new")
+		);
+		assert_eq!(manager.cached(&resource), Some(Bytes::from("new")));
+	}
+
 }
