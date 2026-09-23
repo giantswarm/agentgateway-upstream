@@ -2540,7 +2540,11 @@ async fn streamable_http_oversized_upstream_response_names_size_and_limit() {
 		.unwrap();
 	let text = resp.text().await.unwrap();
 	let msg = terminal_message(&text, 3);
-	assert_eq!(msg["result"]["content"][0]["text"], "x".repeat(16), "{text}");
+	assert_eq!(
+		msg["result"]["content"][0]["text"],
+		"x".repeat(16),
+		"{text}"
+	);
 }
 
 #[tokio::test]
@@ -4389,9 +4393,11 @@ async fn mock_streamable_http_server(stateful: bool) -> MockServer {
 
 // The same server answering a POST with one JSON body instead of an SSE
 // stream: the shape the proxy buffers whole and holds to the frontend's
-// buffer limit.
+// buffer limit. rmcp honours `json_response` in its stateless session mode
+// only (a stateful legacy session streams every answer), so the server runs
+// stateless here.
 async fn mock_streamable_http_server_json_response() -> MockServer {
-	mock_streamable_http_server_inner(true, None, true).await
+	mock_streamable_http_server_inner(false, None, true).await
 }
 
 async fn mock_modern_streamable_http_server() -> MockServer {
