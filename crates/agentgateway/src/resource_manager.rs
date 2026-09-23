@@ -22,6 +22,14 @@ const OPENAPI_TTL: Duration = Duration::from_hours(24);
 const GENERIC_TTL: Duration = Duration::from_mins(15);
 const FAILED_HTTP_REFRESH: Duration = Duration::from_secs(15);
 const MIN_HTTP_REFRESH: Duration = Duration::from_secs(60);
+// A file resource is re-read on this interval besides its watch. A Kubernetes
+// projected volume rotates a certificate by swapping the `..data` symlink of the
+// volume, and a rotation that reaches the process without an inotify event for
+// the file (seen on a Substrate egress gateway: one of two volumes rotated
+// within seconds never woke its watch) must still be noticed well before the
+// old certificate expires; the kubelet writes the new one 30 minutes ahead.
+// Reading a local file once a minute costs nothing measurable.
+const FILE_REFRESH: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 pub enum ResourceKind {
@@ -733,7 +741,7 @@ async fn fetch_direct(client: &Client, resource: &ResourceRef) -> anyhow::Result
 				.with_context(|| format!("read resource file {}", path.display()))?;
 			Ok(FetchResult {
 				content: content.into(),
-				next: None,
+				next: Some(Instant::now() + FILE_REFRESH),
 			})
 		},
 		ResourceRef::Http { url, kind } => {
@@ -1144,6 +1152,55 @@ mod tests {
 				.unwrap(),
 			Bytes::from("new")
 		);
+		assert_eq!(manager.cached(&resource), Some(Bytes::from("new")));
+	}
+
+	/// A file resource carries a periodic refresh besides its watch, so a rotation
+	/// that produced no inotify event for it is still noticed within a minute.
+	#[tokio::test]
+	async fn file_resources_schedule_a_periodic_refresh() {
+		let dir = tempfile::tempdir().unwrap();
+		let file = dir.path().join("credential-bundle.pem");
+		fs_err::write(&file, "old").unwrap();
+		let before = Instant::now();
+		let FetchResult { content, next } =
+			fetch_direct(&test_client(), &ResourceRef::File(file.clone()))
+				.await
+				.unwrap();
+		assert_eq!(content, Bytes::from("old"));
+		let next = next.expect("a file resource schedules its next read");
+		let in_ = next.saturating_duration_since(before);
+		assert!(
+			in_ >= FILE_REFRESH - Duration::from_secs(1) && in_ <= FILE_REFRESH + Duration::from_secs(1),
+			"next read scheduled in {in_:?}, expected about {FILE_REFRESH:?}"
+		);
+	}
+
+	#[tokio::test(start_paused = true)]
+	async fn a_changed_file_is_noticed_by_the_periodic_refresh() {
+		let dir = tempfile::tempdir().unwrap();
+		let file = dir.path().join("credential-bundle.pem");
+		fs_err::write(&file, "old").unwrap();
+
+		let manager = ResourceManager::new(test_client()).unwrap();
+		let resources = ResourceFetcher::managed(manager.clone());
+		let resource = normalize_resource(ResourceRef::File(file.clone())).unwrap();
+		scoped(&resources, || async {
+			resources.fetch(ResourceRef::File(file.clone())).await
+		})
+		.await
+		.unwrap();
+		let mut changes = manager.subscribe_changes();
+
+		fs_err::write(&file, "new").unwrap();
+		// Past the periodic refresh: the scheduler re-reads the file and publishes
+		// the change (the watcher may have published it earlier; either way the
+		// change is out and the cache holds the new content).
+		tokio::time::advance(FILE_REFRESH + Duration::from_secs(1)).await;
+		tokio::time::timeout(Duration::from_secs(5), changes.changed())
+			.await
+			.expect("the changed file must be published")
+			.unwrap();
 		assert_eq!(manager.cached(&resource), Some(Bytes::from("new")));
 	}
 }
