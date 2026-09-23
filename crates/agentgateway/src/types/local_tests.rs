@@ -2636,3 +2636,59 @@ binds:
 		.expect("a change to the key file should notify the resource manager")
 		.expect("resource change channel should stay open");
 }
+
+/// A backend TLS file referenced only under a Substrate policy is resolved by a
+/// serde hook while the config is parsed, outside the resource manager. The load
+/// still makes it a managed dependency: active, watched, and a change to it is
+/// published like a change to a file the load fetched itself.
+#[tokio::test]
+async fn parse_time_backend_tls_files_become_managed_dependencies() {
+	let root = tempfile::NamedTempFile::new().unwrap();
+	fs_err::write(
+		root.path(),
+		include_bytes!("../../tests/common/testdata/root-cert.pem"),
+	)
+	.unwrap();
+	let manager = crate::resource_manager::ResourceManager::new(test_client()).unwrap();
+	let resources = crate::resource_manager::ResourceFetcher::managed(manager.clone());
+	let yaml = format!(
+		r#"
+frontendPolicies:
+  substrateEgressActorResolution:
+    host: 127.0.0.1:6443
+    policies:
+      backendTLS:
+        root: {}
+"#,
+		root.path().display()
+	);
+	NormalizedLocalConfig::from(
+		&test_config(),
+		&resources,
+		ListenerTarget {
+			gateway_name: "name".into(),
+			gateway_namespace: "ns".into(),
+			listener_name: None,
+			port: None,
+		},
+		&yaml,
+	)
+	.await
+	.unwrap();
+
+	let resource = crate::resource_manager::ResourceRef::File(root.path().to_path_buf());
+	assert!(
+		manager.is_active(&resource),
+		"the root certificate read while parsing is a managed dependency"
+	);
+	let mut changes = manager.subscribe_changes();
+	fs_err::write(
+		root.path(),
+		include_bytes!("../../../../examples/mcp-tls/certs/cert.pem"),
+	)
+	.unwrap();
+	tokio::time::timeout(std::time::Duration::from_secs(10), changes.changed())
+		.await
+		.expect("a rotation of the root certificate is published")
+		.unwrap();
+}

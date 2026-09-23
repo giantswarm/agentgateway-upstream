@@ -25,7 +25,7 @@
 version: 2.1
 
 orbs:
-  architect: giantswarm/architect@10.6.0
+  architect: giantswarm/architect@10.6.3
 
 # The upstream commit the line is pinned to (FORK.md, "Pin"), stamped on every
 # published index so a consumer can read which agentgateway it runs without
