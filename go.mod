@@ -43,7 +43,7 @@ require (
 	golang.org/x/time v0.16.0
 	golang.org/x/tools v0.50.0
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260921155816-b14227669459
-	google.golang.org/grpc v1.84.0
+	google.golang.org/grpc v1.83.2
 	google.golang.org/protobuf v1.36.12
 	helm.sh/helm/v4 v4.3.0
 	istio.io/api v1.31.0-alpha.1.0.20260917210935-09c7d5318bb1

@@ -35,7 +35,7 @@ Name|Version|License
 [x/time](https://golang.org/x/time)|v0.16.0|BSD 3-clause "New" or "Revised" License
 [x/tools](https://golang.org/x/tools)|v0.50.0|BSD 3-clause "New" or "Revised" License
 [googleapis/rpc](https://google.golang.org/genproto/googleapis/rpc)|v0.0.0-20260921155816-b14227669459|Apache License 2.0
-[google.golang.org/grpc](https://google.golang.org/grpc)|v1.84.0|Apache License 2.0
+[google.golang.org/grpc](https://google.golang.org/grpc)|v1.83.2|Apache License 2.0
 [google.golang.org/protobuf](https://google.golang.org/protobuf)|v1.36.12|BSD 3-clause "New" or "Revised" License
 [helm/v4](https://helm.sh/helm/v4)|v4.3.0|Apache License 2.0
 [istio.io/api](https://istio.io/api)|v1.31.0-alpha.1.0.20260917210935-09c7d5318bb1|Apache License 2.0
