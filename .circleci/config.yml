@@ -31,7 +31,7 @@ orbs:
 # published index so a consumer can read which agentgateway it runs without
 # this repository at hand. Updated at every re-pin (FORK.md, "Re-pin").
 upstream_annotation: &upstream_annotation |
-  index:io.giantswarm.upstream.version=main@08f4563b
+  index:io.giantswarm.upstream.version=main@3528a428
 
 # Upstream's Dockerfile refuses to build without VERSION and GIT_REVISION
 # (`agentgateway --version` must not report "unknown"); DOCKER_IMAGE_TAG is the
