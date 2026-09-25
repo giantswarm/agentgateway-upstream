@@ -1563,3 +1563,166 @@ async fn substrate_egress_authorizes_http_tls_and_opaque_tcp_connect_tunnels() {
 		);
 	}
 }
+
+/// `google.rpc.Status`, as a control plane encodes a status's details.
+#[derive(Clone, PartialEq, prost::Message)]
+struct RpcStatus {
+	#[prost(int32, tag = "1")]
+	code: i32,
+	#[prost(string, tag = "2")]
+	message: String,
+	#[prost(message, repeated, tag = "3")]
+	details: Vec<prost_types::Any>,
+}
+
+/// `google.rpc.ErrorInfo` (AIP-193).
+#[derive(Clone, PartialEq, prost::Message)]
+struct ErrorInfo {
+	#[prost(string, tag = "1")]
+	reason: String,
+	#[prost(string, tag = "2")]
+	domain: String,
+	#[prost(map = "string, string", tag = "3")]
+	metadata: std::collections::HashMap<String, String>,
+}
+
+const GOLDEN_REFUSAL: &str = "ActorTemplate golden tag is not available for demo/tmpl: the actor cannot be resumed; start a new actor";
+
+fn golden_snapshot_unavailable() -> tonic::Status {
+	use prost::Message;
+	let info = ErrorInfo {
+		reason: "GOLDEN_SNAPSHOT_UNAVAILABLE".to_owned(),
+		domain: "substrate.dev".to_owned(),
+		metadata: [("resumable".to_owned(), "false".to_owned())].into(),
+	};
+	let details = RpcStatus {
+		code: tonic::Code::FailedPrecondition as i32,
+		message: GOLDEN_REFUSAL.to_owned(),
+		details: vec![prost_types::Any {
+			type_url: "type.googleapis.com/google.rpc.ErrorInfo".to_owned(),
+			value: info.encode_to_vec(),
+		}],
+	};
+	tonic::Status::with_details(
+		tonic::Code::FailedPrecondition,
+		GOLDEN_REFUSAL,
+		details.encode_to_vec().into(),
+	)
+}
+
+/// Refuses every resume the way the control plane refuses an actor whose
+/// ActorTemplate lost its golden snapshot.
+#[derive(Clone)]
+struct RefusingHandler {
+	calls: Arc<AtomicUsize>,
+}
+
+#[async_trait::async_trait]
+impl ateapimock::Handler for RefusingHandler {
+	async fn resume_actor(
+		&mut self,
+		_request: &protos::ateapi::ResumeActorRequest,
+	) -> Result<ResumeActorResponse, tonic::Status> {
+		self.calls.fetch_add(1, Ordering::Relaxed);
+		Err(golden_snapshot_unavailable())
+	}
+}
+
+async fn refusing_gateway(calls: Arc<AtomicUsize>) -> (TestBind, impl Drop) {
+	let api = ateapimock::AteApiMock::new(move || RefusingHandler {
+		calls: calls.clone(),
+	})
+	.spawn()
+	.await;
+	let dynamic = Backend::Dynamic(ResourceName::new("dynamic".into(), "".into()), None);
+	let mut gateway = setup_proxy_test("{}")
+		.unwrap()
+		.with_raw_backend(dynamic.into())
+		.with_bind(simple_bind())
+		.with_route(basic_named_route(strng::literal!("/dynamic")));
+	gateway
+		.attach_route_policy(json!({
+			"substrateIngress": {
+				"host": api.address.to_string(),
+				"requestParking": {
+					"budget": "5s",
+					"max": 4,
+					"retryInterval": "10ms",
+					"retryFactor": 1.0,
+				}
+			}
+		}))
+		.await;
+	(gateway, api)
+}
+
+#[tokio::test]
+async fn actor_ingress_answers_a_terminal_refusal_at_once() {
+	let calls = Arc::new(AtomicUsize::new(0));
+	let (gateway, _api) = refusing_gateway(calls.clone()).await;
+
+	let started = std::time::Instant::now();
+	let response = send_request(
+		gateway.serve_http(BIND_KEY),
+		Method::GET,
+		"http://my-actor.demo.actors.resources.substrate.ate.dev/",
+	)
+	.await;
+	assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+	assert!(
+		started.elapsed() < Duration::from_secs(1),
+		"a terminal refusal was parked for {:?}",
+		started.elapsed()
+	);
+	assert_eq!(calls.load(Ordering::Relaxed), 1);
+	let body = String::from_utf8(
+		response
+			.into_body()
+			.collect()
+			.await
+			.unwrap()
+			.to_bytes()
+			.to_vec(),
+	)
+	.unwrap();
+	assert!(body.contains("cannot be resumed"), "body: {body}");
+	assert!(body.contains(GOLDEN_REFUSAL), "body: {body}");
+}
+
+#[tokio::test]
+async fn actor_ingress_passes_a_terminal_refusal_to_a_grpc_caller() {
+	use base64::Engine;
+	use prost::Message;
+
+	let calls = Arc::new(AtomicUsize::new(0));
+	let (gateway, _api) = refusing_gateway(calls.clone()).await;
+
+	let response = send_request_headers(
+		gateway.serve_http(BIND_KEY),
+		Method::POST,
+		"http://my-actor.demo.actors.resources.substrate.ate.dev/lf.a2a.v1.A2AService/SendStreamingMessage",
+		&[
+			("ate-target-actor", "demo/my-actor"),
+			("content-type", "application/grpc"),
+		],
+	)
+	.await;
+	assert_eq!(response.status(), StatusCode::OK);
+	let headers = response.headers();
+	assert_eq!(
+		headers.get("grpc-status").unwrap(),
+		&(tonic::Code::FailedPrecondition as i32).to_string()
+	);
+	let message =
+		percent_encoding::percent_decode_str(headers.get("grpc-message").unwrap().to_str().unwrap())
+			.decode_utf8()
+			.unwrap();
+	assert!(message.contains(GOLDEN_REFUSAL), "grpc-message: {message}");
+	let details = base64::engine::general_purpose::STANDARD_NO_PAD
+		.decode(headers.get("grpc-status-details-bin").unwrap())
+		.unwrap();
+	let status = RpcStatus::decode(details.as_slice()).unwrap();
+	let info = ErrorInfo::decode(status.details[0].value.as_slice()).unwrap();
+	assert_eq!(info.reason, "GOLDEN_SNAPSHOT_UNAVAILABLE");
+	assert_eq!(calls.load(Ordering::Relaxed), 1);
+}
