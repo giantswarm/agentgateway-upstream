@@ -15,7 +15,7 @@ use super::{ActorRef, CACHE_CAPACITY, TRACE_POLICY_KIND, valid_resource_name};
 use crate::http::{PolicyResponse, Request, Response};
 use crate::proxy::dtrace::{Severity, pol_event};
 use crate::proxy::httpproxy::PolicyClient;
-use crate::proxy::{ProxyError, dtrace};
+use crate::proxy::{ProxyError, SubstrateResumeRefusal, dtrace};
 use crate::store::RequestPolicyTrait;
 use crate::telemetry::log::RequestLog;
 use crate::telemetry::metrics::{OutboundCallKind, OutboundCallSubtype};
@@ -32,6 +32,52 @@ const DEFAULT_ACTOR_PORT: u16 = 80;
 const DEFAULT_CONNECT_TARGET_PORT: NonZeroU16 = NonZeroU16::new(8443).unwrap();
 const TARGET_PORT_HEADER: &str = "x-ate-target-port";
 pub(crate) const STALE_ASSIGNMENT_HEADER: &str = "x-ate-assignment-stale";
+/// The AIP-193 ErrorInfo domain of the Substrate control plane's reasons.
+const SUBSTRATE_ERROR_DOMAIN: &str = "substrate.dev";
+/// The ErrorInfo metadata directive (value "false") by which the control plane
+/// marks a resume refusal no retry outlives: a parked request is answered at
+/// once with the control plane's status. A refusal without it (an actor in
+/// transition) stays retryable while parked.
+const RESUMABLE_METADATA_KEY: &str = "resumable";
+const ERROR_INFO_TYPE_URL: &str = "type.googleapis.com/google.rpc.ErrorInfo";
+
+/// The part of `google.rpc.Status` a status's details carry the ErrorInfo in.
+#[derive(Clone, PartialEq, prost::Message)]
+struct RpcStatusDetails {
+	#[prost(message, repeated, tag = "3")]
+	details: Vec<prost_types::Any>,
+}
+
+/// The part of `google.rpc.ErrorInfo` (AIP-193) a refusal is classified by.
+#[derive(Clone, PartialEq, prost::Message)]
+struct ErrorInfo {
+	#[prost(string, tag = "2")]
+	domain: String,
+	#[prost(map = "string, string", tag = "3")]
+	metadata: std::collections::HashMap<String, String>,
+}
+
+/// Whether the control plane marked the refusal not resumable in the
+/// ErrorInfo of its own domain.
+fn terminal_refusal(status: &tonic::Status) -> bool {
+	use prost::Message;
+	let Ok(details) = RpcStatusDetails::decode(status.details()) else {
+		return false;
+	};
+	details
+		.details
+		.iter()
+		.filter(|any| any.type_url == ERROR_INFO_TYPE_URL)
+		.filter_map(|any| ErrorInfo::decode(any.value.as_slice()).ok())
+		.any(|info| {
+			info.domain == SUBSTRATE_ERROR_DOMAIN
+				&& info
+					.metadata
+					.get(RESUMABLE_METADATA_KEY)
+					.map(String::as_str)
+					== Some("false")
+		})
+}
 
 #[derive(Debug, Clone, thiserror::Error)]
 enum ResumeError {
@@ -41,11 +87,29 @@ enum ResumeError {
 	InvalidResponse(String),
 	#[error("request parking capacity exhausted")]
 	ParkingFull,
+	/// A refusal no retry outlives, kept whole for the caller.
+	#[error("{code:?}: {message}")]
+	Refused {
+		code: Code,
+		message: String,
+		details: Bytes,
+	},
 }
 
 impl ResumeError {
 	fn into_proxy_error(self, actor: &ActorRef) -> ProxyError {
 		let (status, body) = match self {
+			Self::Refused {
+				code,
+				message,
+				details,
+			} => {
+				return ProxyError::SubstrateResumeRefused(SubstrateResumeRefusal {
+					code,
+					message: format!("actor {:?} cannot be resumed: {message}", actor.name),
+					details,
+				});
+			},
 			Self::ParkingFull => (
 				StatusCode::SERVICE_UNAVAILABLE,
 				format!("actor {:?} request parking capacity exhausted", actor.name),
@@ -362,6 +426,13 @@ impl SubstrateIngress {
 							uid,
 						));
 					},
+					Ok(Err(status)) if terminal_refusal(&status) => {
+						return Err(ResumeError::Refused {
+							code: status.code(),
+							message: status.message().to_owned(),
+							details: Bytes::copy_from_slice(status.details()),
+						});
+					},
 					Ok(Err(status)) if self.retryable_while_parked(status.code()) => {
 						let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
 						tokio::time::sleep(delay.min(remaining)).await;
@@ -602,6 +673,13 @@ impl SubstrateRequestState {
 						atespace = self.actor.atespace,
 						"substrate request parking capacity exhausted"
 					),
+					ResumeError::Refused { code, message, .. } => warn!(
+						actor = self.actor.name,
+						atespace = self.actor.atespace,
+						grpc.code = ?code,
+						grpc.message = message,
+						"substrate ResumeActor refused the actor for good"
+					),
 				}
 				Err(error.into_proxy_error(&self.actor).into())
 			},
@@ -747,6 +825,48 @@ mod tests {
 		basic_named_route, send_request_headers, setup_proxy_test, simple_bind,
 	};
 	use crate::types::agent::{Backend, ResourceName};
+
+	fn refusal(domain: &str, resumable: Option<&str>) -> Status {
+		use prost::Message;
+		let info = super::ErrorInfo {
+			domain: domain.to_owned(),
+			metadata: resumable
+				.map(|value| (super::RESUMABLE_METADATA_KEY.to_owned(), value.to_owned()))
+				.into_iter()
+				.collect(),
+		};
+		let details = super::RpcStatusDetails {
+			details: vec![prost_types::Any {
+				type_url: super::ERROR_INFO_TYPE_URL.to_owned(),
+				value: info.encode_to_vec(),
+			}],
+		};
+		Status::with_details(
+			tonic::Code::FailedPrecondition,
+			"refused",
+			details.encode_to_vec().into(),
+		)
+	}
+
+	#[test]
+	fn terminal_refusal_needs_the_control_planes_not_resumable_directive() {
+		assert!(super::terminal_refusal(&refusal(
+			"substrate.dev",
+			Some("false")
+		)));
+		assert!(!super::terminal_refusal(&refusal(
+			"substrate.dev",
+			Some("true")
+		)));
+		assert!(!super::terminal_refusal(&refusal("substrate.dev", None)));
+		assert!(!super::terminal_refusal(&refusal(
+			"example.com",
+			Some("false")
+		)));
+		assert!(!super::terminal_refusal(&Status::failed_precondition(
+			"AssignWorker prerequisite not met"
+		)));
+	}
 
 	#[test]
 	fn default_connect_target_port_matches_atunnel_connect_ingress() {
