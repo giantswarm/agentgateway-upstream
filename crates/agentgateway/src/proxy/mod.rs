@@ -86,6 +86,9 @@ impl ProxyError {
 			ProxyError::SubstrateIngressCapacityExhausted => {
 				substrate_ingress_reason(StatusCode::SERVICE_UNAVAILABLE)
 			},
+			ProxyError::SubstrateResumeRefused(refusal) => {
+				substrate_ingress_reason(refusal.http_status())
+			},
 			ProxyError::AIRequest(error) => classify_ai_request(error).reason,
 			ProxyError::AIResponse(error) => classify_ai_response(error).reason,
 			ProxyError::JwtAuthenticationFailure(_) => ProxyResponseReason::JwtAuth,
@@ -118,6 +121,36 @@ impl ProxyError {
 			| ProxyError::BudgetExceeded(_) => ProxyResponseReason::RateLimit,
 			ProxyError::GuardrailRejected { .. } => ProxyResponseReason::Guardrail,
 			ProxyError::RequestLimitExceeded => ProxyResponseReason::Overload,
+		}
+	}
+}
+
+/// A resume the Substrate control plane refused for good, answered with the
+/// control plane's own status: a gRPC caller gets its code, message and details
+/// (`grpc-status-details-bin`), an HTTP caller the HTTP status of the code.
+#[derive(Debug, Clone, thiserror::Error)]
+#[error("{message}")]
+pub struct SubstrateResumeRefusal {
+	pub code: Code,
+	pub message: String,
+	/// The encoded `google.rpc.Status` of the refusal, empty when it had none.
+	pub details: Bytes,
+}
+
+impl SubstrateResumeRefusal {
+	fn http_status(&self) -> StatusCode {
+		// https://github.com/googleapis/googleapis/blob/master/google/rpc/code.proto
+		match self.code {
+			Code::InvalidArgument | Code::FailedPrecondition | Code::OutOfRange => {
+				StatusCode::BAD_REQUEST
+			},
+			Code::NotFound => StatusCode::NOT_FOUND,
+			Code::PermissionDenied => StatusCode::FORBIDDEN,
+			Code::Unauthenticated => StatusCode::UNAUTHORIZED,
+			Code::ResourceExhausted => StatusCode::TOO_MANY_REQUESTS,
+			Code::Unavailable => StatusCode::SERVICE_UNAVAILABLE,
+			Code::DeadlineExceeded => StatusCode::GATEWAY_TIMEOUT,
+			_ => StatusCode::INTERNAL_SERVER_ERROR,
 		}
 	}
 }
@@ -278,6 +311,8 @@ pub enum ProxyError {
 	SubstrateIngressFailed(StatusCode, String, Option<String>),
 	#[error("no worker has room for the actor")]
 	SubstrateIngressCapacityExhausted,
+	#[error("{0}")]
+	SubstrateResumeRefused(SubstrateResumeRefusal),
 	#[error("{0}")]
 	SubstrateEgressDenied(String),
 	#[error("{0}")]
@@ -554,6 +589,7 @@ impl ProxyError {
 			ProxyError::RequestLimitExceeded => StatusCode::SERVICE_UNAVAILABLE,
 			ProxyError::SubstrateIngressFailed(status, _, _) => status,
 			ProxyError::SubstrateIngressCapacityExhausted => StatusCode::SERVICE_UNAVAILABLE,
+			ProxyError::SubstrateResumeRefused(ref refusal) => refusal.http_status(),
 			ProxyError::RateLimitExceeded { .. } => StatusCode::TOO_MANY_REQUESTS,
 			ProxyError::RemoteRateLimitExceeded { .. } => StatusCode::TOO_MANY_REQUESTS,
 			ProxyError::BudgetExceeded(_) => StatusCode::TOO_MANY_REQUESTS,
@@ -672,16 +708,24 @@ impl ProxyError {
 		}
 
 		if let Some(grpc_status) = grpc_status {
-			return rb
+			rb = rb
 				.status(StatusCode::OK)
 				.header(hyper::header::CONTENT_TYPE, "application/grpc")
 				.header("grpc-status", i32::from(grpc_status).to_string())
 				.header(
 					"grpc-message",
 					utf8_percent_encode(&msg, GRPC_MESSAGE_ENCODE_SET).to_string(),
-				)
-				.body(http::Body::empty())
-				.unwrap();
+				);
+			if let ProxyError::SubstrateResumeRefused(refusal) = &this
+				&& !refusal.details.is_empty()
+			{
+				use base64::Engine;
+				rb = rb.header(
+					"grpc-status-details-bin",
+					base64::engine::general_purpose::STANDARD_NO_PAD.encode(&refusal.details),
+				);
+			}
+			return rb.body(http::Body::empty()).unwrap();
 		}
 
 		if let ProxyError::BudgetExceeded(exceeded) = &this {
@@ -761,6 +805,9 @@ fn proxy_error_to_grpc_status(error: &ProxyError, http_status: StatusCode) -> Co
 		ProxyError::NoValidBackends => Code::Unavailable,
 		// HTTP 200 with JSON-RPC error -> gRPC 503
 		ProxyError::MCP(mcp::Error::RateLimited { .. }) => Code::Unavailable,
+		// The control plane's own code: an HTTP status would turn a terminal
+		// refusal into a retryable UNAVAILABLE.
+		ProxyError::SubstrateResumeRefused(refusal) => refusal.code,
 		_ => http_status_to_grpc_status(http_status),
 	}
 }
