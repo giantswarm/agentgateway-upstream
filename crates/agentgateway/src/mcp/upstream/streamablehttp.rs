@@ -134,10 +134,6 @@ impl Client {
 			},
 			Some(ct) if ct.as_bytes().starts_with(JSON_MIME_TYPE.as_bytes()) => {
 				let lim = crate::http::response_buffer_limit(&resp);
-				let content_length = resp
-					.headers()
-					.typed_get::<headers::ContentLength>()
-					.map(|c| c.0);
 				let content_encoding = resp.headers().typed_get::<headers::ContentEncoding>();
 				let body_bytes = crate::http::compression::to_bytes_with_decompression(
 					resp.into_body(),
@@ -145,13 +141,7 @@ impl Client {
 					lim,
 				)
 				.await
-				.map_err(|e| match e {
-					crate::http::compression::Error::LimitExceeded => ClientError::ResponseTooLarge {
-						limit: lim,
-						size: content_length,
-					},
-					e => ClientError::new(e),
-				})?
+				.map_err(ClientError::new)?
 				.1;
 				let message: Option<ServerJsonRpcMessage> =
 					serde_json::from_slice(&body_bytes).map_err(ClientError::new)?;
