@@ -1,7 +1,6 @@
 use serde::Deserialize;
-use tonic::Code;
 
-use super::{ActorRef, TRACE_POLICY_KIND, valid_resource_name};
+use super::{ActorRef, TRACE_POLICY_KIND, policy_service_unavailable, valid_resource_name};
 use crate::http::Request;
 use crate::proxy::httpproxy::PolicyClient;
 use crate::proxy::{ProxyError, ProxyResponse};
@@ -119,7 +118,7 @@ impl EgressActorResolution {
 		.await;
 		let current = match result {
 			Ok(response) => response.into_inner(),
-			Err(status) if matches!(status.code(), Code::Unavailable | Code::DeadlineExceeded) => {
+			Err(status) if policy_service_unavailable(&status) => {
 				return Err(
 					ProxyError::SubstrateEgressUnavailable(format!(
 						"actor identity check unavailable: {status}"
