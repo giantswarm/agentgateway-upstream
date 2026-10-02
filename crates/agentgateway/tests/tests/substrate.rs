@@ -111,6 +111,7 @@ impl credprovidermock::Handler for CredentialHandler {
 		self.calls.fetch_add(1, Ordering::Relaxed);
 		Ok(protos::credprovider::FetchSecretResponse {
 			opaque_bytes: b"injected-token".to_vec(),
+			max_age: None,
 		})
 	}
 }
