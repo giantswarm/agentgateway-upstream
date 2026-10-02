@@ -5,6 +5,20 @@ package credprovider;
 // CredentialProvider resolves an external credential reference. The provider
 // owns authorization and secret storage; AgentGateway only brokers a request.
 service CredentialProvider {
+  // A failed FetchSecret fails the actor's request, with a text/plain body:
+  //
+  //   NotFound, PermissionDenied, FailedPrecondition, Unauthenticated:
+  //     403, "credential provider <name> denied: <status message>". The
+  //     message reaches the actor and must be safe to show.
+  //   Unavailable, DeadlineExceeded, ResourceExhausted, or a provider that
+  //   cannot be reached: 503, "credential provider <name> unavailable".
+  //   Any other status, or an unusable secret: 502,
+  //     "credential provider <name> failed".
+  //
+  // The status describes the gateway's outcome, never the origin's, so no
+  // answer becomes a 404 (clients read it as the destination being missing) or
+  // a 400 (InvalidArgument means the gateway sent a bad URI or actor, not that
+  // the actor's request was malformed).
   rpc FetchSecret(FetchSecretRequest) returns (FetchSecretResponse) {}
 }
 

@@ -213,7 +213,18 @@ impl SubstrateEgress {
 				actor_spiffe_id: actor_identity,
 			})
 			.await
-			.map_err(|status| credential_provider_error(uri, status))?
+			.map_err(|status| {
+				warn!(
+					actor = identity.actor_name,
+					atespace = identity.atespace,
+					uri,
+					grpc.code = ?status.code(),
+					grpc.message = status.message(),
+					error = %status,
+					"substrate credential provider refused FetchSecret"
+				);
+				credential_provider_error(uri, status)
+			})?
 			.into_inner();
 		let secret = credential_secret(response.opaque_bytes)?;
 		self
@@ -288,15 +299,57 @@ fn protected_credential_header(name: &HeaderName) -> bool {
 	)
 }
 
+/// Longest provider message a denial carries to the actor.
+const MAX_PROVIDER_MESSAGE_BYTES: usize = 512;
+
+/// Maps a FetchSecret failure to what the actor sees. The status describes the
+/// gateway's outcome, never the origin's: a refusal is 403 with the provider's
+/// message, which the credprovider contract makes safe to show; an outage is a
+/// retryable 503; anything else is a provider failure, 502. Outage and failure
+/// bodies carry nothing of the provider or the transport.
 fn credential_provider_error(uri: &str, status: tonic::Status) -> ProxyError {
 	let provider = provider_name(uri).unwrap_or("unknown");
-	if policy_service_unavailable(&status) {
-		ProxyError::SubstrateEgressUnavailable(format!(
-			"credential provider {provider} unavailable: {status}"
-		))
-	} else {
-		ProxyError::SubstrateEgressDenied(format!("credential provider {provider} denied: {status}"))
+	if policy_service_unavailable(&status) || status.code() == tonic::Code::ResourceExhausted {
+		return ProxyError::SubstrateEgressUnavailable(format!(
+			"credential provider {provider} unavailable"
+		));
 	}
+	match status.code() {
+		tonic::Code::NotFound
+		| tonic::Code::PermissionDenied
+		| tonic::Code::FailedPrecondition
+		| tonic::Code::Unauthenticated => {
+			let message = sanitized_provider_message(status.message());
+			if message.is_empty() {
+				ProxyError::SubstrateEgressDenied(format!(
+					"credential provider {provider} denied the request"
+				))
+			} else {
+				ProxyError::SubstrateEgressDenied(format!(
+					"credential provider {provider} denied: {message}"
+				))
+			}
+		},
+		_ => ProxyError::SubstrateEgressFailed(format!("credential provider {provider} failed")),
+	}
+}
+
+/// Escapes control characters and keeps at most MAX_PROVIDER_MESSAGE_BYTES,
+/// cut on a character boundary.
+fn sanitized_provider_message(message: &str) -> String {
+	let mut sanitized = String::new();
+	for character in message.trim().chars() {
+		let escaped: String = if character.is_control() {
+			character.escape_default().collect()
+		} else {
+			character.to_string()
+		};
+		if sanitized.len() + escaped.len() > MAX_PROVIDER_MESSAGE_BYTES {
+			break;
+		}
+		sanitized.push_str(&escaped);
+	}
+	sanitized
 }
 
 fn credential_secret(secret: Vec<u8>) -> Result<Vec<u8>, ProxyResponse> {
@@ -304,7 +357,7 @@ fn credential_secret(secret: Vec<u8>) -> Result<Vec<u8>, ProxyResponse> {
 	let secret = secret.strip_suffix(b"\r").unwrap_or(secret);
 	if secret.is_empty() || secret.iter().any(|byte| byte.is_ascii_control()) {
 		return Err(
-			ProxyError::SubstrateEgressUnavailable(
+			ProxyError::SubstrateEgressFailed(
 				"credential provider returned an unusable secret".to_owned(),
 			)
 			.into(),
@@ -609,21 +662,85 @@ mod tests {
 
 	#[test]
 	fn credential_provider_errors_preserve_availability_semantics() {
-		for code in [Code::Unavailable, Code::DeadlineExceeded] {
+		let cases = [
+			(Code::NotFound, ::http::StatusCode::FORBIDDEN),
+			(Code::PermissionDenied, ::http::StatusCode::FORBIDDEN),
+			(Code::FailedPrecondition, ::http::StatusCode::FORBIDDEN),
+			(Code::Unauthenticated, ::http::StatusCode::FORBIDDEN),
+			(Code::Unavailable, ::http::StatusCode::SERVICE_UNAVAILABLE),
+			(
+				Code::DeadlineExceeded,
+				::http::StatusCode::SERVICE_UNAVAILABLE,
+			),
+			(
+				Code::ResourceExhausted,
+				::http::StatusCode::SERVICE_UNAVAILABLE,
+			),
+			(Code::Internal, ::http::StatusCode::BAD_GATEWAY),
+			(Code::Unknown, ::http::StatusCode::BAD_GATEWAY),
+			(Code::InvalidArgument, ::http::StatusCode::BAD_GATEWAY),
+			(Code::Unimplemented, ::http::StatusCode::BAD_GATEWAY),
+		];
+		for (code, want) in cases {
 			let response = credential_provider_error(
 				"ate-secret://kubernetes.io/default/token",
-				tonic::Status::new(code, "provider failed"),
+				tonic::Status::new(code, "provider answer"),
 			)
 			.into_response_with_grpc(false);
-			assert_eq!(response.status(), ::http::StatusCode::SERVICE_UNAVAILABLE);
+			assert_eq!(response.status(), want, "{code:?}");
 		}
+	}
 
-		let response = credential_provider_error(
-			"ate-secret://kubernetes.io/default/token",
-			tonic::Status::permission_denied("not allowed"),
-		)
-		.into_response_with_grpc(false);
-		assert_eq!(response.status(), ::http::StatusCode::FORBIDDEN);
+	#[test]
+	fn credential_provider_error_bodies_carry_the_refusal_and_not_the_transport() {
+		let uri = "ate-secret://kagent.dev/caller/github/bearer";
+		assert_eq!(
+			credential_provider_error(uri, tonic::Status::permission_denied("no github grant"))
+				.to_string(),
+			"credential provider kagent.dev denied: no github grant"
+		);
+		assert_eq!(
+			credential_provider_error(uri, tonic::Status::not_found("")).to_string(),
+			"credential provider kagent.dev denied the request"
+		);
+		assert_eq!(
+			credential_provider_error(
+				uri,
+				tonic::Status::unavailable("dial tcp kagent-controller.kagent.svc:8443: refused")
+			)
+			.to_string(),
+			"credential provider kagent.dev unavailable"
+		);
+		assert_eq!(
+			credential_provider_error(
+				uri,
+				tonic::Status::from_error(Box::new(ProxyError::NoHealthyEndpoints))
+			)
+			.to_string(),
+			"credential provider kagent.dev unavailable"
+		);
+		assert_eq!(
+			credential_provider_error(uri, tonic::Status::internal("panic at server.go:42")).to_string(),
+			"credential provider kagent.dev failed"
+		);
+	}
+
+	#[test]
+	fn credential_provider_refusals_are_sanitized_and_capped() {
+		let uri = "ate-secret://kagent.dev/caller/github/bearer";
+		assert_eq!(
+			credential_provider_error(
+				uri,
+				tonic::Status::permission_denied("line one\r\nremote: forged\u{1b}[31m")
+			)
+			.to_string(),
+			"credential provider kagent.dev denied: line one\\r\\nremote: forged\\u{1b}[31m"
+		);
+
+		let long = "é".repeat(400);
+		let message = sanitized_provider_message(&long);
+		assert!(message.len() <= MAX_PROVIDER_MESSAGE_BYTES);
+		assert_eq!(message, "é".repeat(MAX_PROVIDER_MESSAGE_BYTES / 2));
 	}
 
 	#[test]
