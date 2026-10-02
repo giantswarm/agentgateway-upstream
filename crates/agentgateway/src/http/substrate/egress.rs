@@ -4,9 +4,8 @@ use std::time::{Duration, Instant};
 
 use ::http::{HeaderName, HeaderValue};
 use quick_cache::sync::Cache;
-use tonic::Code;
 
-use super::{ActorIdentity, EgressActorResolution, TRACE_POLICY_KIND};
+use super::{ActorIdentity, EgressActorResolution, TRACE_POLICY_KIND, policy_service_unavailable};
 use crate::http::{PolicyResponse, Request};
 use crate::proxy::httpproxy::{DynamicBackendOverride, PolicyClient};
 use crate::proxy::{ProxyError, ProxyResponse};
@@ -310,13 +309,12 @@ fn protected_credential_header(name: &HeaderName) -> bool {
 
 fn credential_provider_error(uri: &str, status: tonic::Status) -> ProxyError {
 	let provider = provider_name(uri).unwrap_or("unknown");
-	match status.code() {
-		Code::Unavailable | Code::DeadlineExceeded => ProxyError::SubstrateEgressUnavailable(format!(
+	if policy_service_unavailable(&status) {
+		ProxyError::SubstrateEgressUnavailable(format!(
 			"credential provider {provider} unavailable: {status}"
-		)),
-		_ => {
-			ProxyError::SubstrateEgressDenied(format!("credential provider {provider} denied: {status}"))
-		},
+		))
+	} else {
+		ProxyError::SubstrateEgressDenied(format!("credential provider {provider} denied: {status}"))
 	}
 }
 
@@ -365,7 +363,7 @@ async fn fetch_policy(
 	drop(span);
 	match response {
 		Ok(response) => Ok(response.into_inner()),
-		Err(status) if matches!(status.code(), Code::Unavailable | Code::DeadlineExceeded) => Err(
+		Err(status) if policy_service_unavailable(&status) => Err(
 			ProxyError::SubstrateEgressUnavailable(format!("actor egress policy unavailable: {status}")),
 		),
 		Err(status) => Err(ProxyError::SubstrateEgressDenied(format!(
@@ -559,6 +557,8 @@ fn valid_hostname(hostname: &str) -> bool {
 #[cfg(test)]
 mod tests {
 	use std::net::IpAddr;
+
+	use tonic::Code;
 
 	use super::*;
 
@@ -945,6 +945,37 @@ mod tests {
 		)
 		.into_response_with_grpc(false);
 		assert_eq!(response.status(), ::http::StatusCode::FORBIDDEN);
+	}
+
+	#[test]
+	fn a_policy_service_that_cannot_be_reached_is_unavailable_not_a_denial() {
+		// What tonic makes of the channel's error when the connect to the service fails.
+		let unreached = tonic::Status::from_error(Box::new(ProxyError::NoHealthyEndpoints));
+		assert_eq!(unreached.code(), Code::Unknown);
+		assert!(policy_service_unavailable(&unreached));
+		let response = credential_provider_error(
+			"ate-secret://kubernetes.io/default/token",
+			tonic::Status::from_error(Box::new(ProxyError::NoHealthyEndpoints)),
+		)
+		.into_response_with_grpc(false);
+		assert_eq!(response.status(), ::http::StatusCode::SERVICE_UNAVAILABLE);
+
+		// The service's own answers keep their meaning.
+		assert!(policy_service_unavailable(&tonic::Status::unavailable(
+			"down"
+		)));
+		assert!(policy_service_unavailable(
+			&tonic::Status::deadline_exceeded("slow")
+		));
+		assert!(!policy_service_unavailable(&tonic::Status::unknown(
+			"server error"
+		)));
+		assert!(!policy_service_unavailable(
+			&tonic::Status::permission_denied("no")
+		));
+		assert!(!policy_service_unavailable(&tonic::Status::not_found(
+			"no actor"
+		)));
 	}
 
 	#[test]

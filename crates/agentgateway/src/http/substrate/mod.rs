@@ -21,6 +21,19 @@ struct ActorRef {
 	name: String,
 }
 
+/// Whether a failed call to a Substrate policy service (the actor identity check, the egress
+/// policy, a credential provider) means the service could not be asked, rather than that it
+/// refused. Besides the service's own Unavailable and DeadlineExceeded, a status built from a
+/// local proxy error (a refused connect, a failed DNS lookup, no endpoint) never reached the
+/// service: tonic reports it as Unknown, which must not read as a denial.
+fn policy_service_unavailable(status: &tonic::Status) -> bool {
+	matches!(
+		status.code(),
+		tonic::Code::Unavailable | tonic::Code::DeadlineExceeded
+	) || std::error::Error::source(status)
+		.is_some_and(|source| source.is::<crate::proxy::ProxyError>())
+}
+
 fn valid_resource_name(name: &str) -> bool {
 	let bytes = name.as_bytes();
 	(1..=63).contains(&bytes.len())
