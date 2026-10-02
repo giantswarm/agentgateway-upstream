@@ -61,7 +61,7 @@ struct CredentialCacheKey {
 #[derive(Clone)]
 struct CachedCredential {
 	secret: Vec<u8>,
-	fetched_at: Instant,
+	expires_at: Instant,
 }
 
 impl CredentialCache {
@@ -71,24 +71,28 @@ impl CredentialCache {
 		}
 	}
 
-	fn get(&self, key: &CredentialCacheKey, now: Instant, ttl: Duration) -> Option<Vec<u8>> {
+	fn get(&self, key: &CredentialCacheKey, now: Instant) -> Option<Vec<u8>> {
 		if let Some(entry) = self.entries.get(key) {
-			if now.duration_since(entry.fetched_at) <= ttl {
+			if now < entry.expires_at {
 				return Some(entry.secret);
 			}
-			self
-				.entries
-				.remove_if(key, |entry| now.duration_since(entry.fetched_at) > ttl);
+			self.entries.remove_if(key, |entry| now >= entry.expires_at);
 		}
 		None
 	}
 
-	fn insert(&self, key: CredentialCacheKey, secret: Vec<u8>, now: Instant) {
+	/// Keeps the secret for `ttl`; a zero `ttl` keeps nothing and drops any
+	/// entry the key still holds.
+	fn insert(&self, key: CredentialCacheKey, secret: Vec<u8>, now: Instant, ttl: Duration) {
+		if ttl.is_zero() {
+			self.entries.remove(&key);
+			return;
+		}
 		self.entries.insert(
 			key,
 			CachedCredential {
 				secret,
-				fetched_at: now,
+				expires_at: now + ttl,
 			},
 		);
 	}
@@ -96,6 +100,18 @@ impl CredentialCache {
 
 fn default_credential_cache() -> CredentialCache {
 	CredentialCache::new(DEFAULT_CREDENTIAL_CACHE_CAPACITY)
+}
+
+/// How long a fetched secret may be reused: the provider's `max_age`, bounded
+/// by the default. A negative or malformed duration reuses nothing.
+fn credential_cache_ttl(max_age: Option<prost_types::Duration>) -> Duration {
+	let Some(max_age) = max_age else {
+		return DEFAULT_CREDENTIAL_CACHE_TTL;
+	};
+	match Duration::try_from(max_age) {
+		Ok(max_age) => max_age.min(DEFAULT_CREDENTIAL_CACHE_TTL),
+		Err(_) => Duration::ZERO,
+	}
 }
 
 impl RequestPolicyTrait for SubstrateEgress {
@@ -195,11 +211,7 @@ impl SubstrateEgress {
 			actor_identity: actor_identity.clone(),
 			uri: uri.to_owned(),
 		};
-		if let Some(secret) =
-			self
-				.credential_cache
-				.get(&key, Instant::now(), DEFAULT_CREDENTIAL_CACHE_TTL)
-		{
+		if let Some(secret) = self.credential_cache.get(&key, Instant::now()) {
 			return Ok(secret);
 		}
 
@@ -217,9 +229,12 @@ impl SubstrateEgress {
 			.map_err(|status| credential_provider_error(uri, status))?
 			.into_inner();
 		let secret = credential_secret(response.opaque_bytes)?;
-		self
-			.credential_cache
-			.insert(key, secret.clone(), Instant::now());
+		self.credential_cache.insert(
+			key,
+			secret.clone(),
+			Instant::now(),
+			credential_cache_ttl(response.max_age),
+		);
 		Ok(secret)
 	}
 
@@ -645,15 +660,22 @@ mod tests {
 			uri: "ate-secret://kubernetes.io/default/token".to_owned(),
 		};
 		let now = Instant::now();
-		cache.insert(key.clone(), b"token".to_vec(), now);
-		assert_eq!(
-			cache.get(&key, now, DEFAULT_CREDENTIAL_CACHE_TTL),
-			Some(b"token".to_vec())
+		cache.insert(
+			key.clone(),
+			b"token".to_vec(),
+			now,
+			DEFAULT_CREDENTIAL_CACHE_TTL,
 		);
+		assert_eq!(cache.get(&key, now), Some(b"token".to_vec()));
 
 		let stale_at = now - DEFAULT_CREDENTIAL_CACHE_TTL - Duration::from_secs(1);
-		cache.insert(key.clone(), b"stale".to_vec(), stale_at);
-		assert_eq!(cache.get(&key, now, DEFAULT_CREDENTIAL_CACHE_TTL), None);
+		cache.insert(
+			key.clone(),
+			b"stale".to_vec(),
+			stale_at,
+			DEFAULT_CREDENTIAL_CACHE_TTL,
+		);
+		assert_eq!(cache.get(&key, now), None);
 	}
 
 	#[test]
@@ -664,7 +686,12 @@ mod tests {
 			actor_identity: "spiffe://substrate-actor.local/atespace/default/actor/one".to_owned(),
 			uri: "ate-secret://kubernetes.io/default/token".to_owned(),
 		};
-		cache.insert(key.clone(), b"one".to_vec(), now);
+		cache.insert(
+			key.clone(),
+			b"one".to_vec(),
+			now,
+			DEFAULT_CREDENTIAL_CACHE_TTL,
+		);
 
 		let another_actor = CredentialCacheKey {
 			actor_identity: "spiffe://substrate-actor.local/atespace/default/actor/two".to_owned(),
@@ -674,14 +701,8 @@ mod tests {
 			actor_identity: key.actor_identity.clone(),
 			uri: "ate-secret://kubernetes.io/default/other".to_owned(),
 		};
-		assert_eq!(
-			cache.get(&another_actor, now, DEFAULT_CREDENTIAL_CACHE_TTL),
-			None
-		);
-		assert_eq!(
-			cache.get(&another_uri, now, DEFAULT_CREDENTIAL_CACHE_TTL),
-			None
-		);
+		assert_eq!(cache.get(&another_actor, now), None);
+		assert_eq!(cache.get(&another_uri, now), None);
 	}
 
 	#[test]
@@ -699,5 +720,73 @@ mod tests {
 			provider.target.target.as_ref(),
 			crate::types::agent::SimpleBackendReference::InlineBackend(_)
 		));
+	}
+
+	fn cache_key(uri: &str) -> CredentialCacheKey {
+		CredentialCacheKey {
+			actor_identity: "spiffe://substrate-actor.local/atespace/demo/actor/a".to_owned(),
+			uri: uri.to_owned(),
+		}
+	}
+
+	#[test]
+	fn credential_cache_ttl_follows_the_provider_within_the_default() {
+		let seconds = |seconds, nanos| Some(prost_types::Duration { seconds, nanos });
+		assert_eq!(credential_cache_ttl(None), DEFAULT_CREDENTIAL_CACHE_TTL);
+		assert_eq!(credential_cache_ttl(seconds(0, 0)), Duration::ZERO);
+		assert_eq!(
+			credential_cache_ttl(seconds(30, 0)),
+			Duration::from_secs(30)
+		);
+		assert_eq!(
+			credential_cache_ttl(seconds(3600, 0)),
+			DEFAULT_CREDENTIAL_CACHE_TTL,
+			"a provider cannot extend the gateway's bound"
+		);
+		assert_eq!(credential_cache_ttl(seconds(-1, 0)), Duration::ZERO);
+	}
+
+	#[test]
+	fn credential_cache_keeps_a_secret_only_for_its_ttl() {
+		let cache = CredentialCache::new(8);
+		let now = Instant::now();
+		cache.insert(
+			cache_key("ate-secret://a/b/c"),
+			b"kept".to_vec(),
+			now,
+			Duration::from_secs(30),
+		);
+		assert_eq!(
+			cache.get(
+				&cache_key("ate-secret://a/b/c"),
+				now + Duration::from_secs(29)
+			),
+			Some(b"kept".to_vec())
+		);
+		assert_eq!(
+			cache.get(
+				&cache_key("ate-secret://a/b/c"),
+				now + Duration::from_secs(30)
+			),
+			None
+		);
+
+		cache.insert(
+			cache_key("ate-secret://a/b/c"),
+			b"old".to_vec(),
+			now,
+			Duration::from_secs(30),
+		);
+		cache.insert(
+			cache_key("ate-secret://a/b/c"),
+			b"new".to_vec(),
+			now,
+			Duration::ZERO,
+		);
+		assert_eq!(
+			cache.get(&cache_key("ate-secret://a/b/c"), now),
+			None,
+			"a zero max_age drops what an earlier answer left"
+		);
 	}
 }
