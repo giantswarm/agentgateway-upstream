@@ -73,11 +73,19 @@ Everything on `giantswarm` that is not in the pin (`git log main..giantswarm`, t
 | Read a Substrate policy call that never reached its service as unavailability (`http/substrate/mod.rs`, `egress.rs`, `egress_actor_resolution.rs`): a status tonic builds from the channel's own `ProxyError` (a refused connect, a failed DNS lookup, no endpoint) is code `Unknown`, which the actor identity check, the egress policy and the credential providers answered as a denial (403 `actor egress policy denied … upstream call failed: Connect: Connection refused`); it is now `SubstrateEgressUnavailable` (503), and the service's own answers keep their meaning | the control plane behind the headless `api` Service had an endpoint that served nothing, so one policy call in three was refused at connect; the egress told a worker's `git fetch` it was forbidden, and the lab chased a network policy and the route to github.com instead of the control plane ([giantswarm/agentlab#336](https://github.com/giantswarm/agentlab/issues/336)) | the `fix(substrate): an unreachable policy service is unavailable, not denied` commit of pull request [#35](https://github.com/giantswarm/agentgateway-upstream/pull/35) (rebase) | to file: the upstream-shaped commit with DCO sign-off is branch [`upstream/substrate-policy-unreachable`](https://github.com/giantswarm/agentgateway-upstream/tree/upstream/substrate-policy-unreachable) here; upstream `main` maps the same `Unknown` status to a denial in all three places; no upstream issue or pull request covers it (#37742 row 104) |
 | Fork infrastructure: this file, the README pointer, `CODEOWNERS`, `.circleci/config.yml` and `.circleci/Dockerfile.controller` (the publishing pipeline, see "Publishing"), `.github/workflows/sync-upstream.yaml`, `.trivyignore`; `pull_request.yml` on `giantswarm` and on `sync/**` pushes (a re-pin candidate is a rebased branch, so a pull request from it runs no `pull_request` workflow — the push runs `ci-ok`) with GitHub-hosted runners, Linux lanes only, `govulncheck` and `ci-ok`; `release.yml` without its tag and `workflow_dispatch` triggers and `nightly.yml` without its `workflow_dispatch` trigger (upstream's registry pushes stay in the text, unreachable: no event runs them here — see "Publishing") | the line's CI, publishing and sync | the `giantswarm` branch history | not for upstream; ours to keep |
 
-Four patches change agentgateway's behaviour beyond upstream `main` at the pin: the admission of a resuming actor,
-the `GRPCRoute` method-match translation, the file resources
-read from disk on every reload and the parse-time files made managed dependencies, all written for upstream and leaving at the first upstream commit that carries them. The fifth carried commit, the e2e warm step's absolute `-toolexec` path, changes no behaviour
-and leaves the same way; the sixth, the grpc pin at v1.83.2, changes a dependency version only and leaves when upstream
-requires a fixed grpc release (or before: see its row); the seventh, the resume refusal answered at once (#29), leaves with Substrate's directive.
+Eight carried patches sit on the pin, one commit and one row each above. Six change agentgateway's behaviour: the admission of a resuming
+actor, the `GRPCRoute` method-match translation (already in upstream `main` as `2353a2c1`, so it leaves at the next
+re-pin), the file resources read from disk on every reload together with the parse-time files made managed dependencies,
+the resume refusal answered at once (#29, which leaves with Substrate's directive), and the unreachable policy service
+answered as unavailable (#35). All of them are written for upstream and leave at the first upstream commit that carries
+them. The e2e warm step's absolute `-toolexec` path changes no behaviour and leaves the same way. The grpc pin at v1.83.2
+changes a dependency version only and leaves when upstream requires a fixed grpc release (or before: see its row).
+
+Next re-pin: upstream `main` after agentgateway#3677 (`9e78d1da`, 2026-09-26) authorizes actor egress from the
+`spiffe://substrate-actor.local/ateom-for-actor/…` certificate URI that agent-substrate/substrate#1809 (`8d6be5fb`)
+introduced, and no longer reads the `ActorIdentity` extension. The Substrate line does not carry #1809, so a pin at or
+after `9e78d1da` would refuse every actor's CONNECT until the Substrate line moves past it. This line moves past
+`9e78d1da` together with that Substrate move (see "Re-pin", step 1).
 Reverted on 2026-10-02 because upstream declined it: the named buffer error on an MCP upstream's response (#17,
 `3afc3c82`, in 2.1.0 to 2.2.2-rc.2; declined in review on agentgateway#3714). The old message already names the buffer
 limit, and the platform sets its own size (`gateway.http.maxBufferSize`, giantswarm/agent-platform#630). Nothing was dropped at the 2026-09-24 re-pin: upstream merged none of the carried patches
