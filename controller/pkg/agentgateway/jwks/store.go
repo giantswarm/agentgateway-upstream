@@ -122,6 +122,13 @@ func (s *Store) JwksByRequestKey(requestKey remotehttp.FetchKey) (Keyset, bool) 
 	return s.jwksCache.GetJwks(requestKey)
 }
 
+// RefreshNow fetches source's JWKS at once for a data plane's refresh request
+// (see Fetcher.RefreshNow). It serves on every replica: one whose fetcher does
+// not run the schedule answers the caller without persisting.
+func (s *Store) RefreshNow(ctx context.Context, source JwksSource) (Keyset, bool, error) {
+	return s.jwksFetcher.RefreshNow(ctx, source)
+}
+
 func (r *Store) NeedLeaderElection() bool {
 	return true
 }

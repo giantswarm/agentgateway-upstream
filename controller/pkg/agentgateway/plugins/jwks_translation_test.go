@@ -12,15 +12,17 @@ import (
 	"github.com/agentgateway/agentgateway/api"
 	"github.com/agentgateway/agentgateway/controller/api/v1alpha1/agentgateway"
 	"github.com/agentgateway/agentgateway/controller/pkg/agentgateway/jwks"
+	"github.com/agentgateway/agentgateway/controller/pkg/agentgateway/remotehttp"
 )
 
 type stubJWKSLookup struct {
 	inline string
+	key    remotehttp.FetchKey
 	err    error
 }
 
-func (s stubJWKSLookup) InlineForOwner(krt.HandlerContext, jwks.RemoteJwksOwner) (string, error) {
-	return s.inline, s.err
+func (s stubJWKSLookup) InlineForOwner(krt.HandlerContext, jwks.RemoteJwksOwner) (string, remotehttp.FetchKey, error) {
+	return s.inline, s.key, s.err
 }
 
 func longStringPtr(s string) *agentgateway.LongString {
@@ -49,7 +51,7 @@ func TestProcessJWTAuthenticationPolicyWhenLookupReturnsErrorPreservesRemoteProv
 	policy, err := processJWTAuthenticationPolicy(
 		PolicyCtx{
 			Krt:        krt.TestingDummyContext{},
-			JWKSLookup: stubJWKSLookup{err: sentinel},
+			JWKSLookup: stubJWKSLookup{key: "fetch-key", err: sentinel},
 		},
 		jwtAuth,
 		nil,
@@ -71,6 +73,9 @@ func TestProcessJWTAuthenticationPolicyWhenLookupReturnsErrorPreservesRemoteProv
 		t.Fatalf("expected remote provider to be preserved, got %d providers", got)
 	}
 	provider := jwtSpec.Providers[0]
+	if provider.GetRemoteJwksKey() != "fetch-key" {
+		t.Fatalf("expected the fetch key the data plane asks a refresh under, got %q", provider.GetRemoteJwksKey())
+	}
 	if provider.GetInline() != `{"keys":[]}` {
 		t.Fatalf("expected empty key set, got %q", provider.GetInline())
 	}

@@ -1083,6 +1083,13 @@ message TrafficPolicySpec {
 
     // JWT validation options controlling which claims must be present.
     JWTValidationOptions jwt_validation_options = 4;
+
+    // Opaque handle of the control plane's remote JWKS fetch that produced `inline`.
+    // Set only when the keys come from a remote source the control plane fetches. The
+    // data plane passes it to the JwksRefresh service when a token names a key id the
+    // inline set does not have, so a signing-key rotation of the issuer is noticed at
+    // once instead of at the next scheduled fetch.
+    string remote_jwks_key = 5;
   }
   // JWT authentication configuration
   message JWT {
@@ -2361,4 +2368,30 @@ message ModelRoute {
   // Internal LLM router backend populated by this model. Empty uses the
   // legacy listener-scoped implicit model route.
   string router_key = 9;
+}
+
+// JwksRefresh lets a data plane ask the control plane for an immediate refetch of a
+// remote JWKS the control plane pushed inline (`JWTProvider.remote_jwks_key`). A data
+// plane calls it when a token names a key id the pushed set does not have, which is
+// what a signing-key rotation of the issuer looks like between two scheduled fetches.
+// The control plane fetches at most once per key within a short interval whatever the
+// number of callers, pushes a changed set through the normal policy update, and answers
+// with the set it holds so the request that asked can be validated at once.
+service JwksRefresh {
+  rpc Refresh(JwksRefreshRequest) returns (JwksRefreshResponse);
+}
+
+message JwksRefreshRequest {
+  // The `remote_jwks_key` of the provider whose inline keys miss the key id.
+  string remote_jwks_key = 1;
+  // The key id the token named; for the control plane's log only.
+  string kid = 2;
+}
+
+message JwksRefreshResponse {
+  // The JWKS document the control plane holds for the key after this call: the one it
+  // just fetched, or the cached one when the fetch was skipped within the interval.
+  string jwks = 1;
+  // Whether this call fetched the document from the issuer.
+  bool refetched = 2;
 }

@@ -1608,6 +1608,7 @@ impl Route {
 	pub fn from_xds(
 		s: &proto::agent::Route,
 		diagnostics: &mut Diagnostics,
+		jwks_refresh: Option<&http::jwt::JwksRefreshSourceRef>,
 	) -> Result<(Self, ListenerKey, Option<RouteGroupKey>), ProtoError> {
 		let name: RouteName = s
 			.name
@@ -1635,7 +1636,7 @@ impl Route {
 			inline_policies: s
 				.traffic_policies
 				.iter()
-				.map(|policy| traffic_policy_from_proto(policy, diagnostics))
+				.map(|policy| traffic_policy_from_proto(policy, diagnostics, jwks_refresh))
 				.collect::<Result<Vec<_>, _>>()?,
 		};
 		Ok((
@@ -2553,8 +2554,9 @@ fn convert_health(
 fn phased_traffic_policy_from_proto(
 	spec: &proto::agent::TrafficPolicySpec,
 	diagnostics: &mut Diagnostics,
+	jwks_refresh: Option<&http::jwt::JwksRefreshSourceRef>,
 ) -> Result<PhasedTrafficPolicy, ProtoError> {
-	let tp = traffic_policy_from_proto(spec, diagnostics)?;
+	let tp = traffic_policy_from_proto(spec, diagnostics, jwks_refresh)?;
 	Ok(PhasedTrafficPolicy {
 		phase: match proto::agent::traffic_policy_spec::PolicyPhase::try_from(spec.phase)? {
 			proto::agent::traffic_policy_spec::PolicyPhase::Route => PolicyPhase::Route,
@@ -2564,9 +2566,12 @@ fn phased_traffic_policy_from_proto(
 	})
 }
 
+/// `jwks_refresh` is the control plane a JWT provider whose keys were pushed inline can
+/// ask for a refetch (`remote_jwks_key`); `None` leaves such providers on their pushed keys.
 fn traffic_policy_from_proto(
 	spec: &proto::agent::TrafficPolicySpec,
 	diagnostics: &mut Diagnostics,
+	jwks_refresh: Option<&http::jwt::JwksRefreshSourceRef>,
 ) -> Result<TrafficPolicy, ProtoError> {
 	use crate::types::proto::agent::traffic_policy_spec as tps;
 	Ok(match &spec.kind {
@@ -2684,6 +2689,21 @@ fn traffic_policy_from_proto(
 				tps::jwt::Mode::Strict => http::jwt::Mode::Strict,
 				tps::jwt::Mode::Permissive => http::jwt::Mode::Permissive,
 			};
+			let audiences_of = |p: &tps::JwtProvider| {
+				if p.audiences.is_empty() {
+					None
+				} else {
+					Some(p.audiences.clone())
+				}
+			};
+			let validation_options_of = |p: &tps::JwtProvider| {
+				p.jwt_validation_options
+					.as_ref()
+					.map(|vo| http::jwt::JWTValidationOptions {
+						required_claims: vo.required_claims.iter().cloned().collect(),
+					})
+					.unwrap_or_default()
+			};
 			let providers = jwt
 				.providers
 				.iter()
@@ -2696,31 +2716,38 @@ fn traffic_policy_from_proto(
 							));
 						},
 					};
-					let audiences = if p.audiences.is_empty() {
-						None
-					} else {
-						Some(p.audiences.clone())
-					};
-					let jwt_validation_options = p
-						.jwt_validation_options
-						.as_ref()
-						.map(|vo| http::jwt::JWTValidationOptions {
-							required_claims: vo.required_claims.iter().cloned().collect(),
-						})
-						.unwrap_or_default();
 					Ok(jwt_provider_from_inline_jwks_or_warn(
 						diagnostics,
 						"JWT policy",
 						jwks_json,
 						p.issuer.clone(),
-						audiences,
-						jwt_validation_options,
+						audiences_of(p),
+						validation_options_of(p),
 					))
 				})
 				.collect::<Result<Vec<_>, _>>()?
 				.into_iter()
 				.flatten()
 				.collect();
+			// A provider whose keys the control plane fetched can ask it for a refetch when a
+			// token names a key id the pushed set does not have (the issuer rotated its key).
+			let refreshers = match jwks_refresh {
+				Some(source) => jwt
+					.providers
+					.iter()
+					.filter(|p| !p.remote_jwks_key.is_empty())
+					.map(|p| {
+						http::jwt::JwksRefresher::control_plane(
+							source.clone(),
+							p.remote_jwks_key.clone(),
+							p.issuer.clone(),
+							audiences_of(p),
+							validation_options_of(p),
+						)
+					})
+					.collect(),
+				None => Vec::new(),
+			};
 			let jwt_auth = http::jwt::Jwt::from_providers(
 				providers,
 				mode,
@@ -2731,7 +2758,8 @@ fn traffic_policy_from_proto(
 					http::auth::AuthorizationLocation::bearer_header(),
 				)?,
 				jwt.preserve_token,
-			);
+			)
+			.with_refreshers(refreshers);
 			let mcp = match &jwt.mcp {
 				Some(mcp) => {
 					if jwt.providers.len() != 1 {
@@ -3813,6 +3841,7 @@ fn policy_target_from_proto(t: &proto::agent::PolicyTarget) -> Result<PolicyTarg
 pub(crate) fn targeted_policy_from_proto(
 	p: &proto::agent::Policy,
 	diagnostics: &mut Diagnostics,
+	jwks_refresh: Option<&http::jwt::JwksRefreshSourceRef>,
 ) -> Result<TargetedPolicy, ProtoError> {
 	use crate::types::proto::agent::policy as pol;
 
@@ -3823,16 +3852,20 @@ pub(crate) fn targeted_policy_from_proto(
 		.and_then(policy_target_from_proto)?;
 
 	let policy = match &p.kind {
-		Some(pol::Kind::Traffic(spec)) => {
-			PolicyType::Traffic(phased_traffic_policy_from_proto(spec, diagnostics)?)
-		},
+		Some(pol::Kind::Traffic(spec)) => PolicyType::Traffic(phased_traffic_policy_from_proto(
+			spec,
+			diagnostics,
+			jwks_refresh,
+		)?),
 		Some(pol::Kind::Backend(spec)) => {
 			PolicyType::Backend(backend_policy_from_proto(spec, diagnostics)?)
 		},
 		Some(pol::Kind::Frontend(spec)) => {
 			PolicyType::Frontend(frontend_policy_from_proto(spec, diagnostics)?)
 		},
-		Some(pol::Kind::Conditional(cond)) => conditional_policy_from_proto(cond, diagnostics)?,
+		Some(pol::Kind::Conditional(cond)) => {
+			conditional_policy_from_proto(cond, diagnostics, jwks_refresh)?
+		},
 		None => return Err(ProtoError::MissingRequiredField),
 	};
 
@@ -3874,6 +3907,7 @@ fn policy_inheritance_from_proto(inheritance: i32) -> PolicyInheritance {
 fn conditional_policy_from_proto(
 	cond: &proto::agent::ConditionalPolicies,
 	diagnostics: &mut Diagnostics,
+	jwks_refresh: Option<&http::jwt::JwksRefreshSourceRef>,
 ) -> Result<PolicyType, ProtoError> {
 	use crate::types::proto::agent::conditional_policy as cp;
 
@@ -3885,7 +3919,7 @@ fn conditional_policy_from_proto(
 		};
 		match kind {
 			cp::Kind::Traffic(spec) => {
-				let traffic_policy = phased_traffic_policy_from_proto(spec, diagnostics)?;
+				let traffic_policy = phased_traffic_policy_from_proto(spec, diagnostics, jwks_refresh)?;
 				let policy_kind = traffic_policy_kind_name(&traffic_policy.policy);
 				let policy_phase = traffic_policy.phase;
 				if let Some((expected_kind, expected_phase)) = expected_shape {
@@ -4495,7 +4529,7 @@ mod tests {
 			)),
 		};
 
-		let policy = targeted_policy_from_proto(&policy, &mut Diagnostics::default())?;
+		let policy = targeted_policy_from_proto(&policy, &mut Diagnostics::default(), None)?;
 		assert_eq!(policy.creation_timestamp, 123);
 		let PolicyType::Traffic(PhasedTrafficPolicy {
 			policy: TrafficPolicy::RequestHeaderModifier(policies),
@@ -4536,10 +4570,11 @@ mod tests {
 		let err = targeted_policy_from_proto(
 			&policy(Some("server".to_string())),
 			&mut Diagnostics::default(),
+			None,
 		)
 		.unwrap_err();
 		assert!(err.to_string().contains("mcpAuthorization"), "{err}");
-		targeted_policy_from_proto(&policy(None), &mut Diagnostics::default()).unwrap();
+		targeted_policy_from_proto(&policy(None), &mut Diagnostics::default(), None).unwrap();
 	}
 
 	#[test]
@@ -4570,7 +4605,7 @@ mod tests {
 			)),
 		};
 
-		let policy = targeted_policy_from_proto(&policy, &mut Diagnostics::default())?;
+		let policy = targeted_policy_from_proto(&policy, &mut Diagnostics::default(), None)?;
 		let PolicyType::Traffic(PhasedTrafficPolicy {
 			policy: TrafficPolicy::RequestHeaderModifier(policies),
 			..
@@ -4607,7 +4642,7 @@ mod tests {
 		};
 
 		let mut diagnostics = Diagnostics::default();
-		let policy = targeted_policy_from_proto(&policy, &mut diagnostics)?;
+		let policy = targeted_policy_from_proto(&policy, &mut diagnostics, None)?;
 		let PolicyType::Traffic(PhasedTrafficPolicy {
 			policy: TrafficPolicy::RequestHeaderModifier(policies),
 			..
@@ -4680,7 +4715,7 @@ mod tests {
 			)),
 		};
 
-		let policy = targeted_policy_from_proto(&policy, &mut Diagnostics::default())?;
+		let policy = targeted_policy_from_proto(&policy, &mut Diagnostics::default(), None)?;
 		let PolicyType::Traffic(PhasedTrafficPolicy {
 			policy: TrafficPolicy::LocalRateLimit(policies),
 			..
@@ -4721,7 +4756,7 @@ mod tests {
 			)),
 		};
 
-		let err = targeted_policy_from_proto(&policy, &mut Diagnostics::default())
+		let err = targeted_policy_from_proto(&policy, &mut Diagnostics::default(), None)
 			.expect_err("mixed conditional traffic kinds should be rejected");
 		assert!(
 			err
@@ -4769,7 +4804,7 @@ mod tests {
 		};
 
 		let mut diagnostics = Diagnostics::default();
-		let policy = traffic_policy_from_proto(&spec, &mut diagnostics)?;
+		let policy = traffic_policy_from_proto(&spec, &mut diagnostics, None)?;
 		let warnings = diagnostics.into_warnings();
 		assert_eq!(warnings.len(), 1);
 		assert!(warnings[0].contains("failed to create JWT provider"));
@@ -4786,6 +4821,90 @@ mod tests {
 		assert!(matches!(
 			jwt.validate_claims(&build_unsigned_token("kid")),
 			Err(TokenError::UnknownKeyId(kid)) if kid == "kid"
+		));
+		Ok(())
+	}
+
+	#[tokio::test]
+	async fn test_traffic_jwt_remote_key_asks_the_control_plane_on_unknown_kid()
+	-> Result<(), ProtoError> {
+		use proto::agent::traffic_policy_spec as tps;
+
+		use crate::http::jwt::test_support::{FakeJwksRefreshSource, build_token, jwks_with_kids};
+		use crate::http::jwt::{JwksRefreshSourceRef, TokenError};
+
+		let issuer = "https://issuer.example.com";
+		let aud = "audience";
+		let spec = proto::agent::TrafficPolicySpec {
+			phase: tps::PolicyPhase::Route as i32,
+			kind: Some(tps::Kind::Jwt(tps::Jwt {
+				mode: tps::jwt::Mode::Strict as i32,
+				providers: vec![tps::JwtProvider {
+					issuer: issuer.to_string(),
+					audiences: vec![aud.to_string()],
+					jwks_source: Some(tps::jwt_provider::JwksSource::Inline(
+						jwks_with_kids(&["kid-a"]).to_string(),
+					)),
+					remote_jwks_key: "fetch-key-1".to_string(),
+					..Default::default()
+				}],
+				..Default::default()
+			})),
+		};
+		let now = std::time::SystemTime::now()
+			.duration_since(std::time::UNIX_EPOCH)
+			.unwrap()
+			.as_secs();
+		let token_with = |kid: &str| build_token(kid, issuer, aud, now + 600);
+
+		let jwt_of = |policy: TrafficPolicy| {
+			let TrafficPolicy::JwtAuth(policy) = policy else {
+				panic!("expected JWT auth policy");
+			};
+			policy
+				.iter()
+				.next()
+				.expect("expected single JWT policy")
+				.pol
+				.jwt
+				.clone()
+		};
+		let apply = |jwt: crate::http::jwt::Jwt, token: String| async move {
+			let mut req = crate::http::Request::new(crate::http::Body::empty());
+			req.headers_mut().insert(
+				crate::http::header::AUTHORIZATION,
+				crate::http::HeaderValue::from_str(&format!("Bearer {token}")).unwrap(),
+			);
+			jwt.apply(None, &mut req).await
+		};
+
+		// With the control plane at hand, the provider's remote key lets it ask once for the
+		// rotated kid and validate against the answer.
+		let control_plane = Arc::new(FakeJwksRefreshSource::new(jwks_with_kids(&[
+			"kid-a", "kid-b",
+		])));
+		let source: JwksRefreshSourceRef = control_plane.clone();
+		let jwt = jwt_of(traffic_policy_from_proto(
+			&spec,
+			&mut Diagnostics::default(),
+			Some(&source),
+		)?);
+		assert!(apply(jwt.clone(), token_with("kid-a")).await.is_ok());
+		assert!(apply(jwt, token_with("kid-b")).await.is_ok());
+		assert_eq!(
+			control_plane.asked(),
+			vec![("fetch-key-1".to_string(), "kid-b".to_string())]
+		);
+
+		// Without one (a local configuration), the pushed keys are all there is.
+		let jwt = jwt_of(traffic_policy_from_proto(
+			&spec,
+			&mut Diagnostics::default(),
+			None,
+		)?);
+		assert!(matches!(
+			apply(jwt, token_with("kid-b")).await,
+			Err(TokenError::UnknownKeyId(kid)) if kid == "kid-b"
 		));
 		Ok(())
 	}
@@ -4812,7 +4931,8 @@ mod tests {
 			..Default::default()
 		};
 		let mut diagnostics = Diagnostics::default();
-		let TrafficPolicy::JwtAuth(policy) = traffic_policy_from_proto(&spec, &mut diagnostics)? else {
+		let TrafficPolicy::JwtAuth(policy) = traffic_policy_from_proto(&spec, &mut diagnostics, None)?
+		else {
 			panic!("expected JWT auth policy");
 		};
 		let jwt = &policy.iter().next().expect("expected JWT policy").pol;
@@ -4869,7 +4989,7 @@ mod tests {
 			kind: Some(proto::agent::traffic_policy_spec::Kind::Csrf(csrf_spec)),
 		};
 
-		let policy = traffic_policy_from_proto(&spec, &mut Diagnostics::default())?;
+		let policy = traffic_policy_from_proto(&spec, &mut Diagnostics::default(), None)?;
 
 		if let TrafficPolicy::Csrf(_csrf_policy) = policy {
 			// We can't directly access the HashSet since it's private, but we can test
@@ -4899,7 +5019,7 @@ mod tests {
 			)),
 		};
 
-		let policy = traffic_policy_from_proto(&spec, &mut Diagnostics::default())?;
+		let policy = traffic_policy_from_proto(&spec, &mut Diagnostics::default(), None)?;
 		let TrafficPolicy::ExtProc(policy) = policy else {
 			panic!("expected ext_proc policy");
 		};
@@ -4949,7 +5069,7 @@ mod tests {
 			)),
 		};
 
-		let policy = traffic_policy_from_proto(&spec, &mut Diagnostics::default())?;
+		let policy = traffic_policy_from_proto(&spec, &mut Diagnostics::default(), None)?;
 		let TrafficPolicy::ExtProc(policy) = policy else {
 			panic!("expected ext_proc policy");
 		};
@@ -4988,7 +5108,7 @@ mod tests {
 			)),
 		};
 
-		let policy = traffic_policy_from_proto(&spec, &mut Diagnostics::default())?;
+		let policy = traffic_policy_from_proto(&spec, &mut Diagnostics::default(), None)?;
 		let TrafficPolicy::ExtProc(policy) = policy else {
 			panic!("expected ext_proc policy");
 		};

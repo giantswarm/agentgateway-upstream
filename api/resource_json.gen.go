@@ -2140,6 +2140,28 @@ func (this *ModelRoute_ConcreteModel) UnmarshalJSON(b []byte) error {
 	return ResourceUnmarshaler.Unmarshal(bytes.NewReader(b), this)
 }
 
+// MarshalJSON is a custom marshaler for JwksRefreshRequest
+func (this *JwksRefreshRequest) MarshalJSON() ([]byte, error) {
+	str, err := ResourceMarshaler.MarshalToString(this)
+	return []byte(str), err
+}
+
+// UnmarshalJSON is a custom unmarshaler for JwksRefreshRequest
+func (this *JwksRefreshRequest) UnmarshalJSON(b []byte) error {
+	return ResourceUnmarshaler.Unmarshal(bytes.NewReader(b), this)
+}
+
+// MarshalJSON is a custom marshaler for JwksRefreshResponse
+func (this *JwksRefreshResponse) MarshalJSON() ([]byte, error) {
+	str, err := ResourceMarshaler.MarshalToString(this)
+	return []byte(str), err
+}
+
+// UnmarshalJSON is a custom unmarshaler for JwksRefreshResponse
+func (this *JwksRefreshResponse) UnmarshalJSON(b []byte) error {
+	return ResourceUnmarshaler.Unmarshal(bytes.NewReader(b), this)
+}
+
 var (
 	ResourceMarshaler   = &jsonpb.Marshaler{}
 	ResourceUnmarshaler = &jsonpb.Unmarshaler{AllowUnknownFields: true}

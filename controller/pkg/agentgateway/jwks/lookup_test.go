@@ -45,7 +45,7 @@ func TestLookupFailsClosedWhenKeysetIsMissing(t *testing.T) {
 	lookupImpl := lookupIndex.(*lookup)
 	lookupImpl.cache.persisted.entries.WaitUntilSynced(stop)
 
-	_, err := lookupIndex.InlineForOwner(krt.TestingDummyContext{}, RemoteJwksOwner{})
+	_, _, err := lookupIndex.InlineForOwner(krt.TestingDummyContext{}, RemoteJwksOwner{})
 
 	assert.EqualError(t, err, `jwks keyset for "https://issuer.example/jwks" isn't available (not yet fetched or fetch failed)`)
 }
@@ -80,13 +80,13 @@ func TestLookupReturnsPersistedKeyset(t *testing.T) {
 	lookupImpl := lookupIndex.(*lookup)
 	lookupImpl.cache.persisted.entries.WaitUntilSynced(stop)
 
-	inline, err := lookupIndex.InlineForOwner(krt.TestingDummyContext{}, RemoteJwksOwner{})
+	inline, _, err := lookupIndex.InlineForOwner(krt.TestingDummyContext{}, RemoteJwksOwner{})
 
 	assert.NoError(t, err)
 	assert.Equal(t, keyset.JwksJSON, inline)
 
 	missingOwner := RemoteJwksOwner{ID: JwksOwnerID{Name: "missing"}}
-	inline, err = lookupIndex.InlineForOwner(krt.TestingDummyContext{}, missingOwner)
+	inline, _, err = lookupIndex.InlineForOwner(krt.TestingDummyContext{}, missingOwner)
 	assert.Empty(t, inline)
 	assert.ErrorContains(t, err, `jwks resolution for "//missing#" isn't available`)
 }
@@ -118,7 +118,7 @@ func TestLookupTracksTLSAndPersistedKeysetChanges(t *testing.T) {
 	lookup := NewLookup(persisted, collections.ResolvedOwners)
 	owner := OwnersFromPolicy(policy)[0]
 	inline := krt.NewSingleton(func(ctx krt.HandlerContext) *string {
-		value, err := lookup.InlineForOwner(ctx, owner)
+		value, _, err := lookup.InlineForOwner(ctx, owner)
 		if err != nil {
 			value = err.Error()
 		}
@@ -193,7 +193,7 @@ func TestLookupRequiresCanonicalPersistedKeysetName(t *testing.T) {
 	lookupImpl := lookupIndex.(*lookup)
 	lookupImpl.cache.persisted.entries.WaitUntilSynced(stop)
 
-	_, err := lookupIndex.InlineForOwner(krt.TestingDummyContext{}, RemoteJwksOwner{})
+	_, _, err := lookupIndex.InlineForOwner(krt.TestingDummyContext{}, RemoteJwksOwner{})
 
 	assert.EqualError(t, err, `jwks keyset for "https://issuer.example/jwks" isn't available (not yet fetched or fetch failed)`)
 }
@@ -211,7 +211,7 @@ func TestLookupPropagatesResolverError(t *testing.T) {
 		krt.NewStaticCollection(alwaysSynced{}, []ResolvedOwner{{Error: sentinel}}, krt.WithStop(stop)),
 	)
 
-	_, err := lookupIndex.InlineForOwner(krt.TestingDummyContext{}, RemoteJwksOwner{})
+	_, _, err := lookupIndex.InlineForOwner(krt.TestingDummyContext{}, RemoteJwksOwner{})
 
 	assert.EqualError(t, err, sentinel)
 }
@@ -219,7 +219,7 @@ func TestLookupPropagatesResolverError(t *testing.T) {
 func TestLookupFailsWhenPersistedCacheIsNotConfigured(t *testing.T) {
 	lookupIndex := &lookup{}
 
-	_, err := lookupIndex.InlineForOwner(krt.TestingDummyContext{}, RemoteJwksOwner{})
+	_, _, err := lookupIndex.InlineForOwner(krt.TestingDummyContext{}, RemoteJwksOwner{})
 
 	assert.EqualError(t, err, "jwks persisted cache is not configured")
 }
