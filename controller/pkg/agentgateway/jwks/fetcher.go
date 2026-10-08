@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -28,7 +29,15 @@ const (
 	maxRetryShift        = 30
 	clientTimeout        = 10 * time.Second
 	maxConcurrentFetches = 10
+	// onDemandRefreshMinInterval bounds the fetches a data plane's refresh
+	// requests (RefreshNow) can cause per request key: one per interval, whatever
+	// the number of data planes or of tokens with unknown key ids.
+	onDemandRefreshMinInterval = 10 * time.Second
 )
+
+// errRefreshSkipped reports an on-demand refresh that stayed within its
+// interval while no cached keyset was there to answer with.
+var errRefreshSkipped = errors.New("on-demand jwks refresh skipped: within the interval and no cached keyset")
 
 type fetchAt struct {
 	At           time.Time
@@ -217,6 +226,15 @@ type Fetcher struct {
 	schedule          *fetchSchedule
 	subscribers       []chan sets.Set[remotehttp.FetchKey]
 	wake              chan struct{}
+	// onDemand holds each request key's current on-demand interval.
+	onDemand map[remotehttp.FetchKey]onDemandState
+}
+
+// onDemandState is the start of a request key's on-demand interval and the
+// keyset its fetch answered, if one did.
+type onDemandState struct {
+	started time.Time
+	keyset  *Keyset
 }
 
 type fetchState struct {
@@ -242,7 +260,91 @@ func NewFetcher(cache *JwksCache) *Fetcher {
 		schedule:          newFetchSchedule(),
 		subscribers:       make([]chan sets.Set[remotehttp.FetchKey], 0),
 		wake:              make(chan struct{}, 1),
+		onDemand:          make(map[remotehttp.FetchKey]onDemandState),
 	}
+}
+
+// RefreshNow fetches source's JWKS at once, outside the schedule, for a data
+// plane that met a key id its inline set does not have: what a signing-key
+// rotation of the issuer looks like between two scheduled fetches. One fetch
+// runs per request key and onDemandRefreshMinInterval; a call within the
+// interval answers with the keyset the interval's fetch answered, else the
+// cached one. Where this fetcher holds the request (the replica that runs the
+// schedule) the fetched keyset is committed and the subscribers are notified,
+// so every data plane receives it through the normal policy update and the next
+// scheduled fetch moves out by the TTL; a replica without the request answers
+// its callers and persists nothing. Returns the keyset and whether this call
+// fetched it.
+func (f *Fetcher) RefreshNow(ctx context.Context, source JwksSource) (Keyset, bool, error) {
+	if started, last := f.startOnDemandInterval(source.RequestKey); !started {
+		if last != nil {
+			return *last, false, nil
+		}
+		if cached, ok := f.cache.GetJwks(source.RequestKey); ok {
+			return cached, false, nil
+		}
+		return Keyset{}, false, errRefreshSkipped
+	}
+
+	requestURL, jwks, err := f.fetchJwks(ctx, source)
+	if err != nil {
+		return Keyset{}, false, err
+	}
+	keyset, err := buildKeyset(source.RequestKey, requestURL, jwks)
+	if err != nil {
+		return Keyset{}, false, err
+	}
+	f.recordOnDemandResult(source.RequestKey, keyset)
+	if f.commitOnDemandResult(source.RequestKey, keyset, time.Now().Add(source.TTL)) {
+		f.notifySubscribers(sets.New(source.RequestKey))
+	}
+	return keyset, true, nil
+}
+
+// startOnDemandInterval reports whether an on-demand fetch of requestKey may
+// run now and, when it may, starts the key's interval; when it may not, it
+// returns the keyset the interval's fetch answered, if one did. The interval
+// starts before the fetch, so a failing fetch consumes it as well.
+func (f *Fetcher) startOnDemandInterval(requestKey remotehttp.FetchKey) (bool, *Keyset) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	now := time.Now()
+	if state, ok := f.onDemand[requestKey]; ok && now.Sub(state.started) < onDemandRefreshMinInterval {
+		return false, state.keyset
+	}
+	f.onDemand[requestKey] = onDemandState{started: now}
+	return true, nil
+}
+
+// recordOnDemandResult keeps the keyset an on-demand fetch answered for the
+// rest of its interval, so the calls skipped within it answer with it on a
+// replica that does not hold the request as well.
+func (f *Fetcher) recordOnDemandResult(requestKey remotehttp.FetchKey, keyset Keyset) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if state, ok := f.onDemand[requestKey]; ok {
+		state.keyset = &keyset
+		f.onDemand[requestKey] = state
+	}
+}
+
+// commitOnDemandResult publishes an on-demand keyset the way commitFetchResult
+// publishes a scheduled one, at the request's current generation. It returns
+// false, publishing nothing, when this fetcher does not hold the request.
+func (f *Fetcher) commitOnDemandResult(requestKey remotehttp.FetchKey, keyset Keyset, nextFetchAt time.Time) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	state, ok := f.requests[requestKey]
+	if !ok {
+		return false
+	}
+
+	f.cache.putKeyset(keyset)
+	f.scheduleAtLocked(requestKey, state.generation, nextFetchAt, 0)
+	return true
 }
 
 func (f *Fetcher) Run(ctx context.Context) {
@@ -471,6 +573,7 @@ func (f *Fetcher) RemoveKeyset(requestKey remotehttp.FetchKey) {
 		delete(f.requests, requestKey)
 		f.schedule.Remove(requestKey)
 	}
+	delete(f.onDemand, requestKey)
 	hadCache := f.cache.deleteJwks(requestKey)
 	f.mu.Unlock()
 

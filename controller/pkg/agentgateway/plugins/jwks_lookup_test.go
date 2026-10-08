@@ -9,7 +9,7 @@ import (
 )
 
 func TestResolveJWKSInlineForOwnerErrorsWhenJWKSLookupIsNil(t *testing.T) {
-	_, err := resolveJWKSInlineForOwner(PolicyCtx{
+	_, _, err := resolveJWKSInlineForOwner(PolicyCtx{
 		Krt: krt.TestingDummyContext{},
 	}, jwks.RemoteJwksOwner{})
 

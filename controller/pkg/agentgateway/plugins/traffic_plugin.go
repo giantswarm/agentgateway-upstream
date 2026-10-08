@@ -798,11 +798,12 @@ func processJWTAuthenticationPolicy(ctx PolicyCtx, jwt *agentgateway.JWTAuthenti
 			if !ok {
 				continue
 			}
-			inline, err := resolveJWKSInlineForOwner(ctx, owner)
+			inline, requestKey, err := resolveJWKSInlineForOwner(ctx, owner)
 			if err != nil {
 				errs = append(errs, err)
 			}
 			jp.JwksSource = &api.TrafficPolicySpec_JWTProvider_Inline{Inline: inline}
+			jp.RemoteJwksKey = string(requestKey)
 			p.Providers = append(p.Providers, jp)
 		}
 	}

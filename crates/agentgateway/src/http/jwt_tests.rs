@@ -669,6 +669,7 @@ pub async fn test_apply_optional_valid_token_respects_preserve_token() {
 			providers: base.providers.clone(),
 			location: bearer_location(),
 			preserve_token,
+			refreshers: Vec::new(),
 		};
 		let mut req = crate::http::Request::new(crate::http::Body::empty());
 		req.headers_mut().insert(
@@ -955,6 +956,7 @@ pub fn test_validate_claims_multi_providers_colliding_kid_different_keys() {
 		providers: vec![ed25519_provider, ec_provider],
 		location: bearer_location(),
 		preserve_token: false,
+		refreshers: Vec::new(),
 	};
 
 	// Sign with the second provider's key and validate with the second provider's iss and aud.
@@ -1002,6 +1004,7 @@ pub fn test_validate_claims_multi_providers_same_issuer() {
 		providers: providers.into(),
 		location: bearer_location(),
 		preserve_token: false,
+		refreshers: Vec::new(),
 	};
 	let now = jsonwebtoken::get_current_timestamp();
 
@@ -1246,42 +1249,7 @@ async fn test_unknown_kid_triggers_on_demand_jwks_refresh() {
 	use wiremock::matchers::{method, path};
 	use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 
-	// Reuse the ed25519 fixture private key for both kids so a single
-	// signature verifies against either; this test is about kid lookup and
-	// on-demand refetching, not distinct key material.
-	const ED25519_PRIVATE_KEY: &[u8] = &[
-		0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04, 0x20,
-		0x6a, 0xc3, 0xfd, 0xee, 0xee, 0x29, 0x8a, 0x92, 0x63, 0x8b, 0x70, 0x0c, 0x4b, 0x11, 0x7c, 0xc3,
-		0x2e, 0x2d, 0x2a, 0xce, 0x0d, 0xfd, 0x78, 0x76, 0x94, 0xe2, 0x4c, 0xae, 0x8a, 0xd5, 0x82, 0x34,
-	];
-	const ED25519_PUBLIC_X: &str = "2-Jj2UvNCvQiUPNYRgSi0cJSPiJI6Rs6D0UTeEpQVj8";
-
-	fn jwks_with_kids(kids: &[&str]) -> serde_json::Value {
-		json!({
-			"keys": kids
-				.iter()
-				.map(|kid| json!({
-					"use": "sig",
-					"kty": "OKP",
-					"kid": kid,
-					"crv": "Ed25519",
-					"x": ED25519_PUBLIC_X,
-				}))
-				.collect::<Vec<_>>()
-		})
-	}
-
-	fn build_token(kid: &str, issuer: &str, aud: &str, exp: u64) -> String {
-		let claims = json!({ "iss": issuer, "aud": aud, "sub": "test-user", "exp": exp });
-		let mut header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::EdDSA);
-		header.kid = Some(kid.to_string());
-		jsonwebtoken::encode(
-			&header,
-			&claims,
-			&jsonwebtoken::EncodingKey::from_ed_der(ED25519_PRIVATE_KEY),
-		)
-		.unwrap()
-	}
+	use super::test_support::{build_token, jwks_with_kids};
 
 	fn test_client() -> crate::client::Client {
 		crate::client::Client::new(
@@ -1391,4 +1359,79 @@ async fn test_unknown_kid_triggers_on_demand_jwks_refresh() {
 		2,
 		"debounce window must prevent a second refetch"
 	);
+}
+
+#[tokio::test]
+async fn test_unknown_kid_asks_the_control_plane_and_validates_against_its_keys() {
+	use std::sync::Arc;
+
+	use super::test_support::{FakeJwksRefreshSource, build_token, jwks_with_kids};
+	use super::{JwksRefreshSourceRef, JwksRefresher};
+
+	let issuer = "https://example.com";
+	let aud = "test-aud";
+	let now = std::time::SystemTime::now()
+		.duration_since(std::time::UNIX_EPOCH)
+		.unwrap()
+		.as_secs();
+
+	// The keys the control plane pushed know kid-a; the issuer has rotated to kid-b since.
+	let pushed: jsonwebtoken::jwk::JwkSet =
+		serde_json::from_value(jwks_with_kids(&["kid-a"])).unwrap();
+	let provider = Provider::from_jwks(
+		pushed,
+		issuer.to_owned(),
+		Some(vec![aud.to_owned()]),
+		JWTValidationOptions::default(),
+	)
+	.unwrap();
+	let control_plane = Arc::new(FakeJwksRefreshSource::new(jwks_with_kids(&[
+		"kid-a", "kid-b",
+	])));
+	let source: JwksRefreshSourceRef = control_plane.clone();
+	let jwt = Jwt::from_providers(vec![provider], Mode::Strict, bearer_location(), false)
+		.with_refreshers(vec![JwksRefresher::control_plane(
+			source,
+			"fetch-key-1".to_owned(),
+			issuer.to_owned(),
+			Some(vec![aud.to_owned()]),
+			JWTValidationOptions::default(),
+		)]);
+
+	let apply = |token: String| {
+		let jwt = jwt.clone();
+		async move {
+			let mut req = crate::http::Request::new(crate::http::Body::empty());
+			req.headers_mut().insert(
+				crate::http::header::AUTHORIZATION,
+				crate::http::HeaderValue::from_str(&format!("Bearer {token}")).unwrap(),
+			);
+			jwt.apply(None, &mut req).await
+		}
+	};
+
+	// A known kid never asks.
+	assert!(
+		apply(build_token("kid-a", issuer, aud, now + 600))
+			.await
+			.is_ok()
+	);
+	assert_eq!(control_plane.calls(), 0);
+
+	// The rotated kid asks the control plane once, under the provider's fetch key, and
+	// validates against the keys it answers with.
+	let res = apply(build_token("kid-b", issuer, aud, now + 600)).await;
+	assert!(
+		res.is_ok(),
+		"the rotated kid validates after the refresh: {res:?}"
+	);
+	assert_eq!(
+		control_plane.asked(),
+		vec![("fetch-key-1".to_owned(), "kid-b".to_owned())]
+	);
+
+	// A kid the control plane does not have either stays refused.
+	let res = apply(build_token("kid-c", issuer, aud, now + 600)).await;
+	assert!(matches!(res, Err(TokenError::UnknownKeyId(kid)) if kid == "kid-c"));
+	assert_eq!(control_plane.calls(), 2);
 }

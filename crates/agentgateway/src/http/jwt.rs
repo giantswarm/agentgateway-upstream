@@ -1,6 +1,9 @@
 // Inspired by https://github.com/cdriehuys/axum-jwks/blob/main/axum-jwks/src/jwks.rs (MIT license)
 use std::collections::{HashMap, HashSet};
+use std::future::Future;
+use std::pin::Pin;
 use std::str::FromStr;
+use std::sync::Arc;
 
 use ::cel::types::dynamic::DynamicType;
 use jsonwebtoken::jwk::{AlgorithmParameters, EllipticCurve, JwkSet, KeyAlgorithm};
@@ -17,6 +20,100 @@ use crate::*;
 #[cfg(test)]
 #[path = "jwt_tests.rs"]
 mod tests;
+
+/// Fixtures the JWT tests and the xDS conversion tests share.
+#[cfg(test)]
+pub(crate) mod test_support {
+	use std::future::Future;
+	use std::pin::Pin;
+	use std::sync::Mutex;
+	use std::sync::atomic::{AtomicUsize, Ordering};
+
+	use serde_json::json;
+
+	use super::JwksRefreshSource;
+
+	// One ed25519 key serves every kid, so one signature verifies against any of them:
+	// the tests are about kid lookup and refetching, not distinct key material.
+	pub(crate) const ED25519_PRIVATE_KEY: &[u8] = &[
+		0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04, 0x20,
+		0x6a, 0xc3, 0xfd, 0xee, 0xee, 0x29, 0x8a, 0x92, 0x63, 0x8b, 0x70, 0x0c, 0x4b, 0x11, 0x7c, 0xc3,
+		0x2e, 0x2d, 0x2a, 0xce, 0x0d, 0xfd, 0x78, 0x76, 0x94, 0xe2, 0x4c, 0xae, 0x8a, 0xd5, 0x82, 0x34,
+	];
+	pub(crate) const ED25519_PUBLIC_X: &str = "2-Jj2UvNCvQiUPNYRgSi0cJSPiJI6Rs6D0UTeEpQVj8";
+
+	pub(crate) fn jwks_with_kids(kids: &[&str]) -> serde_json::Value {
+		json!({
+			"keys": kids
+				.iter()
+				.map(|kid| json!({
+					"use": "sig",
+					"kty": "OKP",
+					"kid": kid,
+					"crv": "Ed25519",
+					"x": ED25519_PUBLIC_X,
+				}))
+				.collect::<Vec<_>>()
+		})
+	}
+
+	pub(crate) fn build_token(kid: &str, issuer: &str, aud: &str, exp: u64) -> String {
+		let claims = json!({ "iss": issuer, "aud": aud, "sub": "test-user", "exp": exp });
+		let mut header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::EdDSA);
+		header.kid = Some(kid.to_string());
+		jsonwebtoken::encode(
+			&header,
+			&claims,
+			&jsonwebtoken::EncodingKey::from_ed_der(ED25519_PRIVATE_KEY),
+		)
+		.unwrap()
+	}
+
+	/// A control plane that answers every refresh with one JWKS document and records
+	/// what it was asked.
+	#[derive(Debug)]
+	pub(crate) struct FakeJwksRefreshSource {
+		jwks: String,
+		calls: AtomicUsize,
+		asked: Mutex<Vec<(String, String)>>,
+	}
+
+	impl FakeJwksRefreshSource {
+		pub(crate) fn new(jwks: serde_json::Value) -> Self {
+			Self {
+				jwks: jwks.to_string(),
+				calls: AtomicUsize::new(0),
+				asked: Mutex::new(Vec::new()),
+			}
+		}
+
+		pub(crate) fn calls(&self) -> usize {
+			self.calls.load(Ordering::SeqCst)
+		}
+
+		pub(crate) fn asked(&self) -> Vec<(String, String)> {
+			self.asked.lock().unwrap().clone()
+		}
+	}
+
+	impl JwksRefreshSource for FakeJwksRefreshSource {
+		fn refresh<'a>(
+			&'a self,
+			key: &'a str,
+			kid: &'a str,
+		) -> Pin<Box<dyn Future<Output = Option<String>> + Send + 'a>> {
+			Box::pin(async move {
+				self.calls.fetch_add(1, Ordering::SeqCst);
+				self
+					.asked
+					.lock()
+					.unwrap()
+					.push((key.to_owned(), kid.to_owned()));
+				Some(self.jwks.clone())
+			})
+		}
+	}
+}
 
 const TRACE_POLICY_KIND: &str = "jwt";
 
@@ -84,27 +181,77 @@ pub struct Provider {
 	keys: HashMap<String, Jwk>,
 }
 
-/// Rebuilds a single provider's keys from its remote JWKS source on demand,
-/// so a token whose `kid` predates a key rotation can succeed without
-/// waiting for the next scheduled refresh.
+/// A source the data plane asks for a provider's current JWKS document outside the
+/// schedule: the control plane that fetched and pushed the keys inline (Kubernetes),
+/// over the connection the data plane holds to it already. The source bounds its own
+/// calls per key.
+pub trait JwksRefreshSource: Send + Sync + std::fmt::Debug {
+	/// The JWKS document the source holds for `key` after the call (within the source's
+	/// interval, the one it answered in it), or `None` when the call failed or timed out.
+	fn refresh<'a>(
+		&'a self,
+		key: &'a str,
+		kid: &'a str,
+	) -> Pin<Box<dyn Future<Output = Option<String>> + Send + 'a>>;
+}
+
+pub type JwksRefreshSourceRef = Arc<dyn JwksRefreshSource>;
+
+/// Rebuilds a single provider's keys on demand, so a token whose `kid` predates a
+/// key rotation can succeed without waiting for the next scheduled refresh.
 #[derive(Clone)]
-struct JwksRefresher {
-	manager: crate::resource_manager::ResourceManager,
-	resource: crate::resource_manager::ResourceRef,
+pub(crate) struct JwksRefresher {
+	keys: JwksRefreshKeys,
 	issuer: String,
 	audiences: Option<Vec<String>>,
 	jwt_validation_options: JWTValidationOptions,
 }
 
+/// Where a refresher gets the provider's current JWKS document from.
+#[derive(Clone)]
+enum JwksRefreshKeys {
+	/// A remote source this process fetches itself (local configuration).
+	Remote {
+		manager: crate::resource_manager::ResourceManager,
+		resource: crate::resource_manager::ResourceRef,
+	},
+	/// Keys the control plane fetched and pushed inline under `key`.
+	ControlPlane {
+		source: JwksRefreshSourceRef,
+		key: String,
+	},
+}
+
 impl JwksRefresher {
+	/// A refresher for keys the control plane pushed inline under `key`.
+	pub(crate) fn control_plane(
+		source: JwksRefreshSourceRef,
+		key: String,
+		issuer: String,
+		audiences: Option<Vec<String>>,
+		jwt_validation_options: JWTValidationOptions,
+	) -> Self {
+		Self {
+			keys: JwksRefreshKeys::ControlPlane { source, key },
+			issuer,
+			audiences,
+			jwt_validation_options,
+		}
+	}
+
 	/// Returns `None` when the refresh was debounced, failed, or the key is still missing.
 	async fn refresh(&self, kid: &str) -> Option<Jwk> {
-		let bytes = match self.manager.refresh_and_wait(&self.resource).await {
-			Ok(bytes) => bytes,
-			Err(error) => {
-				debug!(%error, "on-demand JWKS refresh did not run");
-				return None;
+		let bytes: bytes::Bytes = match &self.keys {
+			JwksRefreshKeys::Remote { manager, resource } => {
+				match manager.refresh_and_wait(resource).await {
+					Ok(bytes) => bytes,
+					Err(error) => {
+						debug!(%error, "on-demand JWKS refresh did not run");
+						return None;
+					},
+				}
 			},
+			JwksRefreshKeys::ControlPlane { source, key } => source.refresh(key, kid).await?.into(),
 		};
 		let jwks: JwkSet = match serde_json::from_slice(&bytes) {
 			Ok(jwks) => jwks,
@@ -421,8 +568,7 @@ impl LocalJwtConfig {
 				(remote_resource, resources.managed_resource_manager())
 			{
 				refreshers.push(JwksRefresher {
-					manager,
-					resource,
+					keys: JwksRefreshKeys::Remote { manager, resource },
 					issuer: pc.issuer,
 					audiences: pc.audiences,
 					jwt_validation_options: pc.jwt_validation_options,
@@ -566,6 +712,14 @@ impl Jwt {
 			preserve_token,
 			refreshers: Vec::new(),
 		}
+	}
+
+	/// Attaches the on-demand refreshers of providers whose keys the control plane
+	/// pushed inline; built from configuration a provider's own remote source is wired
+	/// in [`LocalJwtConfig::try_into`] instead.
+	pub(crate) fn with_refreshers(mut self, refreshers: Vec<JwksRefresher>) -> Jwt {
+		self.refreshers = refreshers;
+		self
 	}
 }
 
