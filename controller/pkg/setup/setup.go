@@ -284,10 +284,13 @@ func (s *setup) Start(ctx context.Context) error {
 	}
 
 	// build jwks store if it doesn't exist
+	var jwksRefresh *jwks.RefreshService
 	if !runnablesRegistry.Contains(jwks.RunnableName) {
-		if err := buildJwksStore(ctx, mgr, s.APIClient, persistedJWKS, jwksCollections); err != nil {
+		jwksStore, err := buildJwksStore(ctx, mgr, s.APIClient, persistedJWKS, jwksCollections)
+		if err != nil {
 			return fmt.Errorf("error creating jwks store %w", err)
 		}
+		jwksRefresh = jwks.NewRefreshService(jwksCollections.SharedRequests, jwksStore)
 	}
 
 	agw, err := s.buildSyncer(ctx, mgr, setupOpts, agwCollections, resolver, jwksLookup)
@@ -300,8 +303,8 @@ func (s *setup) Start(ctx context.Context) error {
 			xdsMux := cmux.New(s.XDSListener)
 			tlsListener := xdsMux.Match(cmux.TLS())
 			plaintextListener := xdsMux.Match(cmux.Any())
-			runXDSServer(ctx, tlsListener, authenticators, s.GlobalSettings.XdsAuth, certWatcher, agw.NackPublisher, agw.Registrations...)
-			runXDSServer(ctx, plaintextListener, authenticators, s.GlobalSettings.XdsAuth, nil, agw.NackPublisher, agw.Registrations...)
+			runXDSServer(ctx, tlsListener, authenticators, s.GlobalSettings.XdsAuth, certWatcher, agw.NackPublisher, jwksRefresh, agw.Registrations...)
+			runXDSServer(ctx, plaintextListener, authenticators, s.GlobalSettings.XdsAuth, nil, agw.NackPublisher, jwksRefresh, agw.Registrations...)
 			context.AfterFunc(ctx, xdsMux.Close)
 			go func() {
 				if err := xdsMux.Serve(); err != nil && err != cmux.ErrListenerClosed && err != cmux.ErrServerClosed {
@@ -309,9 +312,9 @@ func (s *setup) Start(ctx context.Context) error {
 				}
 			}()
 		} else if s.GlobalSettings.IsXdsTLSEnabled() {
-			runXDSServer(ctx, s.XDSListener, authenticators, s.GlobalSettings.XdsAuth, certWatcher, agw.NackPublisher, agw.Registrations...)
+			runXDSServer(ctx, s.XDSListener, authenticators, s.GlobalSettings.XdsAuth, certWatcher, agw.NackPublisher, jwksRefresh, agw.Registrations...)
 		} else if s.GlobalSettings.IsXdsPlaintextEnabled() {
-			runXDSServer(ctx, s.XDSListener, authenticators, s.GlobalSettings.XdsAuth, nil, agw.NackPublisher, agw.Registrations...)
+			runXDSServer(ctx, s.XDSListener, authenticators, s.GlobalSettings.XdsAuth, nil, agw.NackPublisher, jwksRefresh, agw.Registrations...)
 		}
 	}
 
@@ -471,17 +474,17 @@ func buildJwksStore(
 	apiClient apiclient.Client,
 	persistedJWKS *jwks.PersistedEntries,
 	jwksCollections jwks.Collections,
-) error {
+) (*jwks.Store, error) {
 	jwksStore := jwks.NewStore(jwksCollections.SharedRequests, persistedJWKS, jwks.DefaultJwksStorePrefix)
 	if err := mgr.Add(jwksStore); err != nil {
-		return err
+		return nil, err
 	}
 
 	jwksStoreCMCtrl := jwks.NewConfigMapController(apiClient, jwks.DefaultJwksStorePrefix, namespaces.GetPodNamespace(), jwksStore, persistedJWKS)
 	jwksStoreCMCtrl.Init(ctx)
 	if err := mgr.Add(jwksStoreCMCtrl); err != nil {
-		return err
+		return nil, err
 	}
 
-	return nil
+	return jwksStore, nil
 }

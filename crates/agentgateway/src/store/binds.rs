@@ -111,6 +111,8 @@ pub struct Store {
 	ipv6_enabled: bool,
 	core_ids: Option<Vec<core_affinity::CoreId>>,
 	dynamic_ca_cert_cache: crate::DynamicCaCertCacheConfig,
+	// The control plane a JWT provider whose keys it pushed inline can ask for a refetch.
+	jwks_refresh: Option<crate::http::jwt::JwksRefreshSourceRef>,
 	binds: HashMap<BindKey, Arc<Bind>>,
 	resources: HashMap<Strng, ResourceKind>,
 
@@ -682,6 +684,7 @@ impl Store {
 		Self {
 			ipv6_enabled,
 			dynamic_ca_cert_cache,
+			jwks_refresh: None,
 			core_ids: match threading_mode {
 				crate::ThreadingMode::Multithreaded => None,
 				crate::ThreadingMode::ThreadPerCore => {
@@ -2023,7 +2026,8 @@ impl Store {
 		raw: XdsRoute,
 		diagnostics: &mut Diagnostics,
 	) -> anyhow::Result<()> {
-		let (route, listener_name, rgk) = Route::from_xds(&raw, diagnostics)?;
+		let (route, listener_name, rgk) =
+			Route::from_xds(&raw, diagnostics, self.jwks_refresh.as_ref())?;
 		if let Some(rgk) = rgk {
 			// use group over service key here, the leaf route has a service key for policy
 			self.insert_route_into_group(route, rgk);
@@ -2093,9 +2097,20 @@ impl Store {
 		raw: XdsPolicy,
 		diagnostics: &mut Diagnostics,
 	) -> anyhow::Result<()> {
-		let policy = crate::types::agent_xds::targeted_policy_from_proto(&raw, diagnostics)?;
+		let policy = crate::types::agent_xds::targeted_policy_from_proto(
+			&raw,
+			diagnostics,
+			self.jwks_refresh.as_ref(),
+		)?;
 		self.insert_policy(policy);
 		Ok(())
+	}
+
+	/// Sets the control plane that JWT providers whose keys it pushed inline ask for a
+	/// refetch when a token names a key id the pushed set does not have. Policies converted
+	/// from now on carry it.
+	pub fn set_jwks_refresh(&mut self, source: crate::http::jwt::JwksRefreshSourceRef) {
+		self.jwks_refresh = Some(source);
 	}
 }
 
