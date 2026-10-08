@@ -98,6 +98,13 @@ enum ResumeError {
 
 impl ResumeError {
 	fn into_proxy_error(self, actor: &ActorRef) -> ProxyError {
+		// A gRPC caller is answered with the control plane's own code: the HTTP
+		// fallback would turn a missing actor into UNIMPLEMENTED, a held one into
+		// UNKNOWN.
+		let grpc_code = match &self {
+			Self::Status(code, _) => Some(*code),
+			_ => None,
+		};
 		let (status, body) = match self {
 			Self::Refused {
 				code,
@@ -118,7 +125,7 @@ impl ResumeError {
 				StatusCode::NOT_FOUND,
 				format!("actor {:?} not found", actor.name),
 			),
-			Self::Status(Code::FailedPrecondition, message) => (
+			Self::Status(Code::FailedPrecondition | Code::Aborted, message) => (
 				StatusCode::SERVICE_UNAVAILABLE,
 				format!("actor {:?} unavailable: {message}", actor.name),
 			),
@@ -147,7 +154,7 @@ impl ResumeError {
 				format!("error resuming actor {:?}", actor.name),
 			),
 		};
-		ProxyError::SubstrateIngressFailed(status, body)
+		ProxyError::SubstrateIngressFailed(status, body, grpc_code)
 	}
 }
 
@@ -377,13 +384,21 @@ impl SubstrateIngress {
 				boot: false,
 			};
 			let mut delay = self.request_parking.retry_interval();
+			// The last status the budget was spent retrying (Aborted for a held
+			// actor) is the answer when the budget runs out, not a bare timeout.
+			let mut last: Option<ResumeError> = None;
+			let budget_spent = |last: Option<ResumeError>| {
+				last.unwrap_or_else(|| {
+					ResumeError::Status(
+						Code::DeadlineExceeded,
+						format!("ResumeActor timed out after {budget:?}"),
+					)
+				})
+			};
 			loop {
 				let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
 				if remaining.is_zero() {
-					return Err(ResumeError::Status(
-						Code::DeadlineExceeded,
-						format!("ResumeActor timed out after {budget:?}"),
-					));
+					return Err(budget_spent(last));
 				}
 				let response = dtrace::scope_future(
 					Some(TRACE_POLICY_KIND),
@@ -434,6 +449,10 @@ impl SubstrateIngress {
 						});
 					},
 					Ok(Err(status)) if self.retryable_while_parked(status.code()) => {
+						last = Some(ResumeError::Status(
+							status.code(),
+							status.message().to_owned(),
+						));
 						let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
 						tokio::time::sleep(delay.min(remaining)).await;
 						delay = delay.mul_f64(self.request_parking.retry_factor.max(1.0));
@@ -444,12 +463,7 @@ impl SubstrateIngress {
 							status.message().to_owned(),
 						));
 					},
-					Err(_) => {
-						return Err(ResumeError::Status(
-							Code::DeadlineExceeded,
-							format!("ResumeActor timed out after {budget:?}"),
-						));
-					},
+					Err(_) => return Err(budget_spent(last)),
 				}
 			}
 		};
@@ -746,6 +760,7 @@ impl RequestPolicyTrait for SubstrateIngress {
 				ProxyError::SubstrateIngressFailed(
 					StatusCode::NOT_FOUND,
 					format!("invalid actor authority {authority:?}: {error}"),
+					None,
 				)
 			})?;
 		let actor_port = actor_port(&authority, from_connect_tunnel);
@@ -769,6 +784,7 @@ impl RequestPolicyTrait for SubstrateIngress {
 				ProxyError::SubstrateIngressFailed(
 					StatusCode::NOT_FOUND,
 					format!("invalid {TARGET_ACTOR_HEADER:?}: expected <atespace>/<actor>"),
+					None,
 				)
 				.into(),
 			);
