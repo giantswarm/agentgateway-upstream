@@ -23,6 +23,7 @@ use crate::types::agent::Target;
 use crate::*;
 
 pub mod caclient;
+pub mod jwks;
 pub mod spiffe;
 
 #[derive(serde::Serialize, Clone, Debug, PartialEq, Eq)]

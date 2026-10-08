@@ -46,6 +46,7 @@ output:
             - api://test
             inline: '{"keys":[]}'
             issuer: https://sts.windows.net/test-path/
+            remoteJwksKey: 2ce75f55384e3c837d1357c8b93fabf709bdebd58ed58615756c56fc2827ae04
         phase: GATEWAY
 status:
 - apiVersion: agentgateway.dev/v1alpha1

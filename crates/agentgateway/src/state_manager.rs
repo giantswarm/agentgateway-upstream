@@ -65,6 +65,11 @@ impl StateManager {
 				headers,
 			)
 			.await?;
+			// JWT providers whose keys the control plane pushed inline ask it for a refetch
+			// over the same channel when a token names a key id the pushed set lacks.
+			stores.binds.write().set_jwks_refresh(std::sync::Arc::new(
+				control::jwks::ControlPlaneJwks::new(connector.clone()),
+			));
 			Some(
 				agent_xds::Config::new(
 					agent_xds::GrpcClient::new(connector),
