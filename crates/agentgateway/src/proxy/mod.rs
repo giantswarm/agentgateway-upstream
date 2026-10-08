@@ -77,7 +77,7 @@ impl ProxyError {
 			| ProxyError::BackendUnsupportedMirror
 			| ProxyError::FilterError(_)
 			| ProxyError::StaleAssignment => ProxyResponseReason::Internal,
-			ProxyError::SubstrateIngressFailed(status, _) => substrate_ingress_reason(*status),
+			ProxyError::SubstrateIngressFailed(status, _, _) => substrate_ingress_reason(*status),
 			ProxyError::SubstrateResumeRefused(refusal) => {
 				substrate_ingress_reason(refusal.http_status())
 			},
@@ -280,8 +280,10 @@ pub enum ProxyError {
 	ExtProc(#[from] ext_proc::Error),
 	#[error("processing failed: {0}")]
 	ProcessingString(String),
+	/// The HTTP status, the message and, when the control plane answered, its
+	/// gRPC code for a gRPC caller.
 	#[error("{1}")]
-	SubstrateIngressFailed(StatusCode, String),
+	SubstrateIngressFailed(StatusCode, String, Option<Code>),
 	#[error("{0}")]
 	SubstrateResumeRefused(SubstrateResumeRefusal),
 	#[error("{0}")]
@@ -489,7 +491,7 @@ impl ProxyError {
 			ProxyError::Body(_) => StatusCode::SERVICE_UNAVAILABLE,
 			ProxyError::ProcessingString(_) => StatusCode::SERVICE_UNAVAILABLE,
 			ProxyError::RequestLimitExceeded => StatusCode::SERVICE_UNAVAILABLE,
-			ProxyError::SubstrateIngressFailed(status, _) => status,
+			ProxyError::SubstrateIngressFailed(status, _, _) => status,
 			ProxyError::SubstrateResumeRefused(ref refusal) => refusal.http_status(),
 			ProxyError::RateLimitExceeded { .. } => StatusCode::TOO_MANY_REQUESTS,
 			ProxyError::RemoteRateLimitExceeded {
@@ -666,6 +668,7 @@ fn proxy_error_to_grpc_status(error: &ProxyError, http_status: StatusCode) -> Co
 		// The control plane's own code: an HTTP status would turn a terminal
 		// refusal into a retryable UNAVAILABLE.
 		ProxyError::SubstrateResumeRefused(refusal) => refusal.code,
+		ProxyError::SubstrateIngressFailed(_, _, Some(code)) => *code,
 		_ => http_status_to_grpc_status(http_status),
 	}
 }
@@ -832,7 +835,12 @@ mod tests {
 			(StatusCode::GATEWAY_TIMEOUT, ProxyResponseReason::Timeout),
 		] {
 			assert_eq!(
-				ProxyResponse::Error(ProxyError::SubstrateIngressFailed(status, String::new())).as_reason(),
+				ProxyResponse::Error(ProxyError::SubstrateIngressFailed(
+					status,
+					String::new(),
+					None
+				))
+				.as_reason(),
 				reason
 			);
 		}
@@ -969,6 +977,40 @@ mod tests {
 		assert_eq!(
 			response.headers().get("grpc-message").unwrap(),
 			"no%20healthy%20backends"
+		);
+	}
+
+	#[test]
+	fn grpc_error_response_carries_the_substrate_control_planes_code() {
+		let grpc_status = |error: ProxyError| {
+			error
+				.into_response_with_grpc(true)
+				.headers()
+				.get("grpc-status")
+				.unwrap()
+				.clone()
+		};
+		let held = ProxyError::SubstrateIngressFailed(
+			StatusCode::SERVICE_UNAVAILABLE,
+			"actor \"a\" unavailable: another operation is in progress".to_owned(),
+			Some(Code::Aborted),
+		);
+		let missing = ProxyError::SubstrateIngressFailed(
+			StatusCode::NOT_FOUND,
+			"actor \"a\" not found".to_owned(),
+			Some(Code::NotFound),
+		);
+		let invalid = ProxyError::SubstrateIngressFailed(
+			StatusCode::NOT_FOUND,
+			"invalid \"ate-target-actor\"".to_owned(),
+			None,
+		);
+
+		assert_eq!(grpc_status(held), i32::from(Code::Aborted).to_string());
+		assert_eq!(grpc_status(missing), i32::from(Code::NotFound).to_string());
+		assert_eq!(
+			grpc_status(invalid),
+			i32::from(Code::Unimplemented).to_string()
 		);
 	}
 
