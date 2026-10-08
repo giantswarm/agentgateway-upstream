@@ -2,6 +2,8 @@ syntax = "proto3";
 
 package credprovider;
 
+import "google/protobuf/duration.proto";
+
 // CredentialProvider resolves an external credential reference. The provider
 // owns authorization and secret storage; AgentGateway only brokers a request.
 service CredentialProvider {
@@ -31,4 +33,9 @@ message FetchSecretRequest {
 
 message FetchSecretResponse {
   bytes opaque_bytes = 1;
+  // How long the gateway may reuse the secret for the same actor and URI.
+  // Unset keeps the gateway's default; zero makes the gateway fetch it again
+  // for every request. The gateway never reuses a secret longer than its
+  // default, whatever the provider answers.
+  google.protobuf.Duration max_age = 2;
 }
