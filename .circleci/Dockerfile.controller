@@ -7,7 +7,7 @@
 # 10101, the same entrypoint). VERSION is the image tag, passed by the pipeline
 # as a build argument and linked into the binary the way upstream's release
 # workflow does it. Keep the runtime stage in step with upstream's file.
-FROM --platform=$BUILDPLATFORM docker.io/library/golang:1.27.1 AS builder
+FROM --platform=$BUILDPLATFORM docker.io/library/golang:1.27.2 AS builder
 
 WORKDIR /src
 
