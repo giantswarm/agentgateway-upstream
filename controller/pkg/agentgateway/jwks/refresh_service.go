@@ -41,7 +41,7 @@ func (s *RefreshService) Refresh(ctx context.Context, req *api.JwksRefreshReques
 		return nil, status.Errorf(codes.NotFound, "no remote JWKS is fetched under key %q", requestKey)
 	}
 
-	keyset, refetched, err := s.store.RefreshNow(ctx, request.JwksSource())
+	keyset, refetched, err := s.store.RefreshNow(ctx, request.JwksSource(), req.GetKid())
 	if err != nil {
 		if !errors.Is(err, errRefreshSkipped) {
 			logger.Error("error fetching jwks for a data plane's refresh request", "request_key", requestKey, "kid", req.GetKid(), "url", request.Target.URL, "error", err)
