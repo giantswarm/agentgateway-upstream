@@ -45,7 +45,7 @@ func TestRefreshNowFetchesCommitsAndNotifiesWhenRequestIsLive(t *testing.T) {
 	require.NoError(t, f.AddOrUpdateKeyset(source))
 	updates := f.SubscribeToUpdates()
 
-	keyset, refetched, err := f.RefreshNow(ctx, source)
+	keyset, refetched, err := f.RefreshNow(ctx, source, "rotated")
 	require.NoError(t, err)
 	assert.True(t, refetched)
 	assert.Equal(t, int32(1), fetches.Load())
@@ -65,7 +65,7 @@ func TestRefreshNowFetchesCommitsAndNotifiesWhenRequestIsLive(t *testing.T) {
 	assert.WithinDuration(t, time.Now().Add(source.TTL), next.At, time.Minute)
 
 	// Within the interval a second call answers the cache without a fetch.
-	again, refetched, err := f.RefreshNow(ctx, source)
+	again, refetched, err := f.RefreshNow(ctx, source, "rotated")
 	require.NoError(t, err)
 	assert.False(t, refetched)
 	assert.Equal(t, keyset.JwksJSON, again.JwksJSON)
@@ -80,7 +80,7 @@ func TestRefreshNowWithoutLiveRequestAnswersWithoutCommitting(t *testing.T) {
 	f.defaultJwksClient = stubJwksClient{t: t, expectedReq: source.Target, result: sampleKeyset(t)}
 	updates := f.SubscribeToUpdates()
 
-	keyset, refetched, err := f.RefreshNow(t.Context(), source)
+	keyset, refetched, err := f.RefreshNow(t.Context(), source, "rotated")
 	require.NoError(t, err)
 	assert.True(t, refetched)
 	assert.NotEmpty(t, keyset.JwksJSON)
@@ -93,14 +93,50 @@ func TestRefreshNowWithoutLiveRequestAnswersWithoutCommitting(t *testing.T) {
 	}
 }
 
+func TestRefreshNowAnswersAHeldKeysetWithTheKidWithoutFetching(t *testing.T) {
+	// A replica that does not run the schedule answers every data plane asking
+	// for the rotated kid from the keyset its fetch answered, past the interval,
+	// until the replica that does pushes it.
+	source := testSource()
+	fetches := &atomic.Int32{}
+	f := NewFetcher(NewCache())
+	f.defaultJwksClient = countingJwksClient{
+		inner: stubJwksClient{t: t, expectedReq: source.Target, result: sampleKeyset(t)},
+		calls: fetches,
+	}
+	const kid = "JWxVLtipR-Q6wF2zmQKEoxbFhqwibK2aKNLyRqNxdj4"
+
+	_, refetched, err := f.RefreshNow(t.Context(), source, kid)
+	require.NoError(t, err)
+	assert.True(t, refetched)
+
+	f.mu.Lock()
+	state := f.onDemand[source.RequestKey]
+	state.started = time.Now().Add(-onDemandRefreshMinInterval)
+	f.onDemand[source.RequestKey] = state
+	f.mu.Unlock()
+
+	held, refetched, err := f.RefreshNow(t.Context(), source, kid)
+	require.NoError(t, err)
+	assert.False(t, refetched, "the held keyset has the kid")
+	assert.Contains(t, held.JwksJSON, kid)
+	assert.Equal(t, int32(1), fetches.Load())
+
+	// A kid the held keyset lacks is fetched again once the interval is over.
+	_, refetched, err = f.RefreshNow(t.Context(), source, "rotated-again")
+	require.NoError(t, err)
+	assert.True(t, refetched)
+	assert.Equal(t, int32(2), fetches.Load())
+}
+
 func TestRefreshNowFailedFetchConsumesTheInterval(t *testing.T) {
 	source := testSource()
 	f := NewFetcher(NewCache())
 	f.defaultJwksClient = stubJwksClient{t: t, expectedReq: source.Target, err: errors.New("issuer down")}
 
-	_, _, err := f.RefreshNow(t.Context(), source)
+	_, _, err := f.RefreshNow(t.Context(), source, "rotated")
 	assert.ErrorContains(t, err, "issuer down")
 
-	_, _, err = f.RefreshNow(t.Context(), source)
+	_, _, err = f.RefreshNow(t.Context(), source, "rotated")
 	assert.ErrorIs(t, err, errRefreshSkipped)
 }
