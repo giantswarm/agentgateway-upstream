@@ -231,7 +231,7 @@ type Fetcher struct {
 }
 
 // onDemandState is the start of a request key's on-demand interval and the
-// keyset its fetch answered, if one did.
+// keyset its latest on-demand fetch answered, if one did.
 type onDemandState struct {
 	started time.Time
 	keyset  *Keyset
@@ -265,17 +265,23 @@ func NewFetcher(cache *JwksCache) *Fetcher {
 }
 
 // RefreshNow fetches source's JWKS at once, outside the schedule, for a data
-// plane that met a key id its inline set does not have: what a signing-key
-// rotation of the issuer looks like between two scheduled fetches. One fetch
-// runs per request key and onDemandRefreshMinInterval; a call within the
-// interval answers with the keyset the interval's fetch answered, else the
-// cached one. Where this fetcher holds the request (the replica that runs the
-// schedule) the fetched keyset is committed and the subscribers are notified,
-// so every data plane receives it through the normal policy update and the next
-// scheduled fetch moves out by the TTL; a replica without the request answers
-// its callers and persists nothing. Returns the keyset and whether this call
-// fetched it.
-func (f *Fetcher) RefreshNow(ctx context.Context, source JwksSource) (Keyset, bool, error) {
+// plane that met key id kid its inline set does not have: what a signing-key
+// rotation of the issuer looks like between two scheduled fetches. A keyset
+// this fetcher holds that has kid already (the cached one, or one an on-demand
+// fetch answered within the source's TTL) is answered without a fetch: the
+// data plane has not received it yet, which on a replica that does not hold
+// the request lasts until the scheduled fetch of the one that does. Otherwise
+// one fetch runs per request key and onDemandRefreshMinInterval; a call within
+// the interval answers with the latest on-demand keyset, else the cached one.
+// Where this fetcher holds the request (the replica that runs the schedule) the
+// fetched keyset is committed and the subscribers are notified, so every data
+// plane receives it through the normal policy update and the next scheduled
+// fetch moves out by the TTL; a replica without the request answers its callers
+// and persists nothing. Returns the keyset and whether this call fetched it.
+func (f *Fetcher) RefreshNow(ctx context.Context, source JwksSource, kid string) (Keyset, bool, error) {
+	if held, ok := f.heldKeysetWithKid(source, kid); ok {
+		return held, false, nil
+	}
 	if started, last := f.startOnDemandInterval(source.RequestKey); !started {
 		if last != nil {
 			return *last, false, nil
@@ -301,25 +307,52 @@ func (f *Fetcher) RefreshNow(ctx context.Context, source JwksSource) (Keyset, bo
 	return keyset, true, nil
 }
 
+// heldKeysetWithKid returns the cached keyset of source, else the latest
+// on-demand one fetched within the source's TTL, when it has key id kid.
+func (f *Fetcher) heldKeysetWithKid(source JwksSource, kid string) (Keyset, bool) {
+	if kid == "" {
+		return Keyset{}, false
+	}
+	if cached, ok := f.cache.GetJwks(source.RequestKey); ok && keysetHasKid(cached, kid) {
+		return cached, true
+	}
+	f.mu.Lock()
+	state, ok := f.onDemand[source.RequestKey]
+	f.mu.Unlock()
+	if ok && state.keyset != nil && time.Since(state.keyset.FetchedAt) < source.TTL && keysetHasKid(*state.keyset, kid) {
+		return *state.keyset, true
+	}
+	return Keyset{}, false
+}
+
+// keysetHasKid reports whether keyset's JWKS document has a key with id kid.
+func keysetHasKid(keyset Keyset, kid string) bool {
+	var jwks jose.JSONWebKeySet
+	if err := json.Unmarshal([]byte(keyset.JwksJSON), &jwks); err != nil {
+		return false
+	}
+	return len(jwks.Key(kid)) > 0
+}
+
 // startOnDemandInterval reports whether an on-demand fetch of requestKey may
 // run now and, when it may, starts the key's interval; when it may not, it
-// returns the keyset the interval's fetch answered, if one did. The interval
+// returns the latest on-demand keyset, if a fetch answered one. The interval
 // starts before the fetch, so a failing fetch consumes it as well.
 func (f *Fetcher) startOnDemandInterval(requestKey remotehttp.FetchKey) (bool, *Keyset) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
 	now := time.Now()
-	if state, ok := f.onDemand[requestKey]; ok && now.Sub(state.started) < onDemandRefreshMinInterval {
+	state, ok := f.onDemand[requestKey]
+	if ok && now.Sub(state.started) < onDemandRefreshMinInterval {
 		return false, state.keyset
 	}
-	f.onDemand[requestKey] = onDemandState{started: now}
+	f.onDemand[requestKey] = onDemandState{started: now, keyset: state.keyset}
 	return true, nil
 }
 
-// recordOnDemandResult keeps the keyset an on-demand fetch answered for the
-// rest of its interval, so the calls skipped within it answer with it on a
-// replica that does not hold the request as well.
+// recordOnDemandResult keeps the keyset an on-demand fetch answered, so later
+// calls answer with it on a replica that does not hold the request as well.
 func (f *Fetcher) recordOnDemandResult(requestKey remotehttp.FetchKey, keyset Keyset) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
