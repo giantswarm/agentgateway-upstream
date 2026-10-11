@@ -8,7 +8,7 @@ deploys) and inside Agent Substrate (`atenet-router` and `atenet-egress` of the
 they run is pinned, built, scanned and published. It answers one question from one place: **which agentgateway are
 we running, and why does it differ from upstream?**
 
-Tracking (this fork has issues disabled): the line [giantswarm/giantswarm#37758](https://github.com/giantswarm/giantswarm/issues/37758),
+Tracking: the fork's own issues are filed in this repository's tracker; the cross-repo tracking is the line [giantswarm/giantswarm#37758](https://github.com/giantswarm/giantswarm/issues/37758),
 upstream engagement [giantswarm/giantswarm#37742](https://github.com/giantswarm/giantswarm/issues/37742), the sibling
 lines built the same way — kagent [giantswarm/giantswarm#37010](https://github.com/giantswarm/giantswarm/issues/37010)
 (`giantswarm/kagent-upstream`) and Substrate [giantswarm/giantswarm#37757](https://github.com/giantswarm/giantswarm/issues/37757)
