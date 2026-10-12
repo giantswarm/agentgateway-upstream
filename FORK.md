@@ -59,7 +59,7 @@ therefore moved this line onto `main` ≥ `8dba3989` first; the Substrate chart 
 
 ## Carried patches
 
-Everything on `giantswarm` that is not in the pin (`git log main..giantswarm`, the mirror `main` being the pin):
+Everything on `giantswarm` that is not in the pin (`git log main..giantswarm`, the mirror `main` being the pin). A change carried since 2026-10-12 has a ledger file of its own in [`fork/`](fork/) instead of a row here, so concurrent pull requests never edit the same lines; the rows below move there in a pull request of their own:
 
 | Patch | Purpose | Fork commit | Upstream |
 |---|---|---|---|
