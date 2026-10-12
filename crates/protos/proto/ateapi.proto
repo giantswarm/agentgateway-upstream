@@ -111,6 +111,12 @@ message CredentialHeader {
   string header = 1;
   string prefix = 2;
   string credential_uri = 3;
+  // Scopes the replacement to requests whose path, without its query, lies
+  // under this prefix at a segment boundary. Empty applies to every path. Per
+  // header, the entry with the longest matching prefix applies, the entry
+  // without one otherwise. A path with a dot or empty segment, a backslash, or
+  // a percent-encoded ".", "/" or "\" matches no prefix.
+  string path_prefix = 5;
 }
 
 message GetActorEgressPolicyRequest {

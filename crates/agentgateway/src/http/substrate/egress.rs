@@ -179,7 +179,7 @@ impl SubstrateEgress {
 		let Some(effects) = effects else {
 			return Ok(());
 		};
-		for injection in &effects.replace_headers {
+		for injection in replace_headers_for(&effects.replace_headers, req.uri().path()) {
 			if !req.headers().contains_key(&injection.header) {
 				continue;
 			}
@@ -254,6 +254,80 @@ impl SubstrateEgress {
 			})
 			.map_err(Into::into)
 	}
+}
+
+/// Selects the `replace_headers` entries that apply to a request for `path`, at most one per header
+/// name (compared case-insensitively), in the order the names first appear: the entry with the
+/// longest `path_prefix` the path lies under, the entry without a prefix otherwise, none if neither.
+/// A path that is not canonical (see [`canonical_path`]) matches no prefix. Same rules as
+/// Substrate's `egresspolicy.ReplaceHeadersFor`.
+fn replace_headers_for<'a>(
+	replace_headers: &'a [protos::ateapi::CredentialHeader],
+	path: &str,
+) -> Vec<&'a protos::ateapi::CredentialHeader> {
+	let canonical = canonical_path(path);
+	let mut chosen: Vec<(String, Option<&protos::ateapi::CredentialHeader>)> = Vec::new();
+	for injection in replace_headers {
+		let name = injection.header.to_ascii_lowercase();
+		let index = match chosen.iter().position(|(seen, _)| *seen == name) {
+			Some(index) => index,
+			None => {
+				chosen.push((name, None));
+				chosen.len() - 1
+			},
+		};
+		let prefix = injection.path_prefix.as_str();
+		if !prefix.is_empty() && !(canonical && path_prefix_matches(prefix, path)) {
+			continue;
+		}
+		let entry = &mut chosen[index].1;
+		if entry.is_none_or(|previous| prefix.len() > previous.path_prefix.len()) {
+			*entry = Some(injection);
+		}
+	}
+	chosen.into_iter().filter_map(|(_, entry)| entry).collect()
+}
+
+/// Whether `path` lies under `prefix`: it equals the prefix or continues it at a segment boundary.
+/// "/api" matches "/api" and "/api/v4" but not "/apis"; "/api/" matches "/api/v4" but not "/api".
+fn path_prefix_matches(prefix: &str, path: &str) -> bool {
+	path
+		.strip_prefix(prefix)
+		.is_some_and(|rest| rest.is_empty() || prefix.ends_with('/') || rest.starts_with('/'))
+}
+
+/// Whether an absolute path reads the same to every origin. Prefixes compare byte for byte, so a
+/// path with a dot or empty segment, a backslash, or a percent-encoded '.', '/' or '\' could resolve
+/// outside a prefix it starts with; such a path is not canonical.
+fn canonical_path(path: &str) -> bool {
+	let Some(rest) = path.strip_prefix('/') else {
+		return false;
+	};
+	if path
+		.bytes()
+		.any(|byte| byte <= b' ' || byte >= 0x7f || matches!(byte, b'\\' | b'?' | b'#'))
+	{
+		return false;
+	}
+	let lower = path.to_ascii_lowercase();
+	if ["%2e", "%2f", "%5c"]
+		.iter()
+		.any(|encoded| lower.contains(encoded))
+	{
+		return false;
+	}
+	let mut segments = rest.split('/').peekable();
+	while let Some(segment) = segments.next() {
+		if segment.is_empty() && segments.peek().is_some() {
+			return false;
+		}
+		// A ';' starts path parameters, which some origins strip before resolving dot segments.
+		let name = segment.split(';').next().unwrap_or_default();
+		if name == "." || name == ".." {
+			return false;
+		}
+	}
+	true
 }
 
 fn provider_name(uri: &str) -> Option<&str> {
@@ -896,6 +970,7 @@ mod tests {
 				header: "authorization".to_owned(),
 				prefix: "Bearer ".to_owned(),
 				credential_uri: "ate-secret://kubernetes.io/default/token".to_owned(),
+				..Default::default()
 			},
 			b"token\n".to_vec(),
 		)
@@ -923,6 +998,7 @@ mod tests {
 				header: header.to_owned(),
 				prefix: String::new(),
 				credential_uri: "ate-secret://kubernetes.io/default/token".to_owned(),
+				..Default::default()
 			};
 			assert!(credential_header(&injection, b"token".to_vec()).is_err());
 		}
@@ -948,11 +1024,90 @@ mod tests {
 	}
 
 	#[test]
+	fn path_prefixes_match_at_segment_boundaries() {
+		for (prefix, path, want) in [
+			("/api", "/api", true),
+			("/api", "/api/v4", true),
+			("/api", "/apis", false),
+			("/api/", "/api/v4", true),
+			("/api/", "/api/", true),
+			("/api/", "/api", false),
+			("/", "/anything", true),
+			("/api/v4", "/api", false),
+		] {
+			assert_eq!(
+				path_prefix_matches(prefix, path),
+				want,
+				"path_prefix_matches({prefix:?}, {path:?})"
+			);
+		}
+	}
+
+	#[test]
+	fn replace_headers_apply_the_longest_matching_path_prefix() {
+		fn header(name: &str, uri: &str, path_prefix: &str) -> protos::ateapi::CredentialHeader {
+			protos::ateapi::CredentialHeader {
+				header: name.to_owned(),
+				credential_uri: uri.to_owned(),
+				path_prefix: path_prefix.to_owned(),
+				..Default::default()
+			}
+		}
+		let bearer = header("authorization", "ate-secret://p/bearer", "/api/");
+		let basic = header("Authorization", "ate-secret://p/basic", "");
+		let api_key = header("X-Api-Key", "ate-secret://p/key", "/api/");
+		let v4 = header("AUTHORIZATION", "ate-secret://p/v4", "/api/v4");
+		let replace_headers = [bearer, basic, api_key, v4];
+		let uris = |path: &str| -> Vec<&str> {
+			replace_headers_for(&replace_headers, path)
+				.into_iter()
+				.map(|injection| injection.credential_uri.as_str())
+				.collect()
+		};
+
+		let basic = "ate-secret://p/basic";
+		let bearer = "ate-secret://p/bearer";
+		let api_key = "ate-secret://p/key";
+		let v4 = "ate-secret://p/v4";
+		for (path, want) in [
+			("/repo.git/info/refs", vec![basic]),
+			("/api/users", vec![bearer, api_key]),
+			("/api/v4/projects", vec![v4, api_key]),
+			("/api/v4", vec![v4, api_key]),
+			("/api/v40", vec![bearer, api_key]),
+			("/api", vec![basic]),
+			// Paths an origin could resolve elsewhere get only the entry without a prefix.
+			("/api/../admin", vec![basic]),
+			("/api/v4/..;/x", vec![basic]),
+			("/api//v4", vec![basic]),
+			("/api/%2e%2e/admin", vec![basic]),
+			("/api/%2Fv4", vec![basic]),
+			("/api\\v4", vec![basic]),
+			("", vec![basic]),
+		] {
+			assert_eq!(uris(path), want, "replace_headers_for({path:?})");
+		}
+
+		// Without a prefixed entry, every path gets the unprefixed one, as before path prefixes.
+		let unprefixed = [header("authorization", basic, "")];
+		for path in ["/", "/api/v4", "/api/../admin"] {
+			let chosen = replace_headers_for(&unprefixed, path);
+			assert_eq!(chosen.len(), 1, "{path:?}");
+			assert_eq!(chosen[0].credential_uri, basic);
+		}
+		// A header whose only entry is scoped elsewhere is not replaced at all.
+		let scoped = [header("authorization", bearer, "/api/")];
+		assert!(replace_headers_for(&scoped, "/repo.git").is_empty());
+		assert_eq!(replace_headers_for(&scoped, "/api/v4").len(), 1);
+	}
+
+	#[test]
 	fn malformed_credential_secrets_fail_closed() {
 		let injection = protos::ateapi::CredentialHeader {
 			header: "authorization".to_owned(),
 			prefix: "Bearer ".to_owned(),
 			credential_uri: "ate-secret://kubernetes.io/default/token".to_owned(),
+			..Default::default()
 		};
 		assert!(credential_header(&injection, Vec::new()).is_err());
 		assert!(credential_header(&injection, b"bad\nsecret".to_vec()).is_err());
