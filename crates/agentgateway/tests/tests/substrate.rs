@@ -1552,6 +1552,7 @@ async fn substrate_egress_replaces_only_requested_credentials(
 			header: "authorization".to_owned(),
 			prefix: "Bearer ".to_owned(),
 			credential_uri: "ate-secret://kubernetes.io/default/upstream-token".to_owned(),
+			..Default::default()
 		}],
 	});
 	let ports = Some(protos::ateapi::Ports {
@@ -2549,6 +2550,7 @@ async fn substrate_egress_propagates_trace_context_to_policy_and_credential_call
 						header: "authorization".to_owned(),
 						prefix: "Bearer ".to_owned(),
 						credential_uri: "ate-secret://kubernetes.io/default/upstream-token".to_owned(),
+						..Default::default()
 					}],
 				}),
 			}),
