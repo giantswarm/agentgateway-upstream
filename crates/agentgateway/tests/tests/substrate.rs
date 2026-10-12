@@ -1940,6 +1940,7 @@ async fn substrate_egress_replaces_only_requested_credentials(
 				audiences: vec!["https://api.example.com".to_owned()],
 				expiration_seconds: jwt_expiration_seconds,
 			}),
+			..Default::default()
 		}],
 	});
 	let ports = Some(protos::ateapi::Ports {
@@ -3106,6 +3107,7 @@ async fn substrate_egress_propagates_trace_context_to_policy_and_credential_call
 						prefix: "Bearer ".to_owned(),
 						credential_uri: "ate-secret://kubernetes.io/default/upstream-token".to_owned(),
 						actor_jwt: None,
+						..Default::default()
 					}],
 				}),
 			}),
