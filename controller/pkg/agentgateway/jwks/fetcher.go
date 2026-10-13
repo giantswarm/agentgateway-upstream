@@ -230,11 +230,13 @@ type Fetcher struct {
 	onDemand map[remotehttp.FetchKey]onDemandState
 }
 
-// onDemandState is the start of a request key's on-demand interval and the
-// keyset its latest on-demand fetch answered, if one did.
+// onDemandState is the start of a request key's on-demand interval, the
+// keyset its latest on-demand fetch answered, if one did, and the interval's
+// fetch: done is closed once it has answered or failed.
 type onDemandState struct {
 	started time.Time
 	keyset  *Keyset
+	done    chan struct{}
 }
 
 type fetchState struct {
@@ -272,7 +274,8 @@ func NewFetcher(cache *JwksCache) *Fetcher {
 // data plane has not received it yet, which on a replica that does not hold
 // the request lasts until the scheduled fetch of the one that does. Otherwise
 // one fetch runs per request key and onDemandRefreshMinInterval; a call within
-// the interval answers with the latest on-demand keyset, else the cached one.
+// the interval awaits the interval's fetch while it runs (bounded by ctx), then
+// answers with the latest on-demand keyset, else the cached one.
 // Where this fetcher holds the request (the replica that runs the schedule) the
 // fetched keyset is committed and the subscribers are notified, so every data
 // plane receives it through the normal policy update and the next scheduled
@@ -282,8 +285,9 @@ func (f *Fetcher) RefreshNow(ctx context.Context, source JwksSource, kid string)
 	if held, ok := f.heldKeysetWithKid(source, kid); ok {
 		return held, false, nil
 	}
-	if started, last := f.startOnDemandInterval(source.RequestKey); !started {
-		if last != nil {
+	started, done := f.startOnDemandInterval(source.RequestKey)
+	if !started {
+		if last := f.awaitOnDemandFetch(ctx, source.RequestKey, done); last != nil {
 			return *last, false, nil
 		}
 		if cached, ok := f.cache.GetJwks(source.RequestKey); ok {
@@ -291,6 +295,7 @@ func (f *Fetcher) RefreshNow(ctx context.Context, source JwksSource, kid string)
 		}
 		return Keyset{}, false, errRefreshSkipped
 	}
+	defer close(done)
 
 	requestURL, jwks, err := f.fetchJwks(ctx, source)
 	if err != nil {
@@ -335,20 +340,38 @@ func keysetHasKid(keyset Keyset, kid string) bool {
 }
 
 // startOnDemandInterval reports whether an on-demand fetch of requestKey may
-// run now and, when it may, starts the key's interval; when it may not, it
-// returns the latest on-demand keyset, if a fetch answered one. The interval
-// starts before the fetch, so a failing fetch consumes it as well.
-func (f *Fetcher) startOnDemandInterval(requestKey remotehttp.FetchKey) (bool, *Keyset) {
+// run now and returns the interval's done channel: when it may, it starts the
+// key's interval with a new channel, which the caller closes once its fetch has
+// answered or failed; when it may not, the channel is the running interval's.
+// The interval starts before the fetch, so a failing fetch consumes it as well.
+func (f *Fetcher) startOnDemandInterval(requestKey remotehttp.FetchKey) (bool, chan struct{}) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
 	now := time.Now()
 	state, ok := f.onDemand[requestKey]
 	if ok && now.Sub(state.started) < onDemandRefreshMinInterval {
-		return false, state.keyset
+		return false, state.done
 	}
-	f.onDemand[requestKey] = onDemandState{started: now, keyset: state.keyset}
-	return true, nil
+	done := make(chan struct{})
+	f.onDemand[requestKey] = onDemandState{started: now, keyset: state.keyset, done: done}
+	return true, done
+}
+
+// awaitOnDemandFetch waits until the interval's fetch behind done has answered
+// or failed, or ctx ends, and returns the latest on-demand keyset of
+// requestKey, if a fetch answered one: a call that arrives while the fetch runs
+// answers with what it brings rather than with the keyset it replaces.
+func (f *Fetcher) awaitOnDemandFetch(ctx context.Context, requestKey remotehttp.FetchKey, done <-chan struct{}) *Keyset {
+	if done != nil {
+		select {
+		case <-done:
+		case <-ctx.Done():
+		}
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.onDemand[requestKey].keyset
 }
 
 // recordOnDemandResult keeps the keyset an on-demand fetch answered, so later

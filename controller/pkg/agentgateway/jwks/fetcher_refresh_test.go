@@ -140,3 +140,88 @@ func TestRefreshNowFailedFetchConsumesTheInterval(t *testing.T) {
 	_, _, err = f.RefreshNow(t.Context(), source, "rotated")
 	assert.ErrorIs(t, err, errRefreshSkipped)
 }
+
+// gatedJwksClient signals each fetch on started and answers once release is
+// closed.
+type gatedJwksClient struct {
+	inner   JwksHttpClient
+	started chan<- struct{}
+	release <-chan struct{}
+}
+
+func (c gatedJwksClient) FetchJwks(ctx context.Context, target remotehttp.FetchTarget) (jose.JSONWebKeySet, error) {
+	c.started <- struct{}{}
+	<-c.release
+	return c.inner.FetchJwks(ctx, target)
+}
+
+func TestRefreshNowAwaitsTheFetchInFlight(t *testing.T) {
+	// Two data planes ask for the same rotated kid at once: the second call
+	// waits for the first one's fetch and answers what it brings, not the
+	// cached keyset it replaces.
+	source := testSource()
+	fetches := &atomic.Int32{}
+	started := make(chan struct{}, 2)
+	release := make(chan struct{})
+	f := NewFetcher(NewCache())
+	f.defaultJwksClient = countingJwksClient{
+		inner: gatedJwksClient{
+			inner:   stubJwksClient{t: t, expectedReq: source.Target, result: sampleKeyset(t)},
+			started: started,
+			release: release,
+		},
+		calls: fetches,
+	}
+	require.NoError(t, f.AddOrUpdateKeyset(source))
+	f.cache.putKeyset(Keyset{RequestKey: source.RequestKey, URL: source.Target.URL, FetchedAt: time.Now(), JwksJSON: `{"keys":[]}`})
+	const kid = "JWxVLtipR-Q6wF2zmQKEoxbFhqwibK2aKNLyRqNxdj4"
+
+	type answer struct {
+		keyset    Keyset
+		refetched bool
+		err       error
+	}
+	ask := func(answers chan<- answer) {
+		keyset, refetched, err := f.RefreshNow(t.Context(), source, kid)
+		answers <- answer{keyset, refetched, err}
+	}
+	first := make(chan answer, 1)
+	go ask(first)
+	<-started
+
+	second := make(chan answer, 1)
+	go ask(second)
+	select {
+	case a := <-second:
+		t.Fatalf("the second call answered while the fetch was in flight: %+v", a)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(release)
+	for _, answers := range []chan answer{first, second} {
+		a := <-answers
+		require.NoError(t, a.err)
+		assert.Contains(t, a.keyset.JwksJSON, kid)
+	}
+	assert.Equal(t, int32(1), fetches.Load(), "one fetch for both calls")
+}
+
+func TestRefreshNowStopsWaitingWhenTheCallerGivesUp(t *testing.T) {
+	source := testSource()
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	defer close(release)
+	f := NewFetcher(NewCache())
+	f.defaultJwksClient = gatedJwksClient{
+		inner:   stubJwksClient{t: t, expectedReq: source.Target, result: sampleKeyset(t)},
+		started: started,
+		release: release,
+	}
+	go func() { _, _, _ = f.RefreshNow(context.Background(), source, "rotated") }()
+	<-started
+
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancel()
+	_, _, err := f.RefreshNow(ctx, source, "rotated")
+	assert.ErrorIs(t, err, errRefreshSkipped, "nothing fetched or cached to answer with")
+}
