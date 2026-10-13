@@ -1,0 +1,13 @@
+# A remote JWKS is refetched on an unknown key id, local configuration
+
+- **Status:** carried
+- **Upstream:** [agentgateway#3037](https://github.com/agentgateway/agentgateway/pull/3037) (open) for [agentgateway#2798](https://github.com/agentgateway/agentgateway/issues/2798); falls away at the re-pin onto the first upstream commit containing it (#37742 row 143)
+- **Our commit:** the `fix: refetch remote JWKS on unknown key id before rejecting` commit, cherry-picked with its author's sign-off from agentgateway#3037
+
+## Change
+
+Refetch a remote JWKS on an unknown key id before refusing the token, local configuration (`ResourceManager::refresh_and_wait`, `JwksRefresher` in `http/jwt.rs`): at most one refetch per resource and 10 s
+
+## Reason
+
+after an issuer's signing-key rotation, tokens signed with the new key were refused (`token uses the unknown key`) until the next scheduled JWKS fetch ([#46](https://github.com/giantswarm/agentgateway-upstream/issues/46)); the local-configuration half of the fix
