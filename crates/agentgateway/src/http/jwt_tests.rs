@@ -1435,3 +1435,115 @@ async fn test_unknown_kid_asks_the_control_plane_and_validates_against_its_keys(
 	assert!(matches!(res, Err(TokenError::UnknownKeyId(kid)) if kid == "kid-c"));
 	assert_eq!(control_plane.calls(), 2);
 }
+
+#[tokio::test]
+async fn test_unknown_kid_requests_await_the_refresh_in_flight() {
+	use std::future::Future;
+	use std::pin::Pin;
+	use std::sync::Arc;
+	use std::sync::atomic::{AtomicUsize, Ordering};
+
+	use futures::FutureExt;
+
+	use super::test_support::{build_token, jwks_with_kids};
+	use super::{JwksRefreshSource, JwksRefreshSourceRef, JwksRefresher};
+	use crate::control::jwks::RefreshCalls;
+
+	/// A control plane whose answer waits for `gate`, behind the data plane's own calls.
+	#[derive(Debug)]
+	struct SlowControlPlane {
+		calls: RefreshCalls,
+		asked: Arc<AtomicUsize>,
+		gate: Arc<tokio::sync::Notify>,
+		jwks: String,
+	}
+
+	impl JwksRefreshSource for SlowControlPlane {
+		fn refresh<'a>(
+			&'a self,
+			key: &'a str,
+			_kid: &'a str,
+		) -> Pin<Box<dyn Future<Output = Option<String>> + Send + 'a>> {
+			let asked = self.asked.clone();
+			let gate = self.gate.clone();
+			let jwks = self.jwks.clone();
+			Box::pin(self.calls.get_or_start(key, move || {
+				asked.fetch_add(1, Ordering::SeqCst);
+				async move {
+					gate.notified().await;
+					Some(jwks)
+				}
+				.boxed()
+			}))
+		}
+	}
+
+	let issuer = "https://example.com";
+	let aud = "test-aud";
+	let now = std::time::SystemTime::now()
+		.duration_since(std::time::UNIX_EPOCH)
+		.unwrap()
+		.as_secs();
+
+	let pushed: jsonwebtoken::jwk::JwkSet =
+		serde_json::from_value(jwks_with_kids(&["kid-a"])).unwrap();
+	let provider = Provider::from_jwks(
+		pushed,
+		issuer.to_owned(),
+		Some(vec![aud.to_owned()]),
+		JWTValidationOptions::default(),
+	)
+	.unwrap();
+	let asked = Arc::new(AtomicUsize::new(0));
+	let gate = Arc::new(tokio::sync::Notify::new());
+	let source: JwksRefreshSourceRef = Arc::new(SlowControlPlane {
+		calls: RefreshCalls::default(),
+		asked: asked.clone(),
+		gate: gate.clone(),
+		jwks: jwks_with_kids(&["kid-a", "kid-b"]).to_string(),
+	});
+	let jwt = Jwt::from_providers(vec![provider], Mode::Strict, bearer_location(), false)
+		.with_refreshers(vec![JwksRefresher::control_plane(
+			source,
+			"fetch-key-1".to_owned(),
+			issuer.to_owned(),
+			Some(vec![aud.to_owned()]),
+			JWTValidationOptions::default(),
+		)]);
+
+	let apply = |token: String| {
+		let jwt = jwt.clone();
+		async move {
+			let mut req = crate::http::Request::new(crate::http::Body::empty());
+			req.headers_mut().insert(
+				crate::http::header::AUTHORIZATION,
+				crate::http::HeaderValue::from_str(&format!("Bearer {token}")).unwrap(),
+			);
+			jwt.apply(None, &mut req).await
+		}
+	};
+
+	// Ten requests with the rotated kid arrive while the first one's refresh is in flight.
+	let requests: Vec<_> = (0..10)
+		.map(|_| tokio::spawn(apply(build_token("kid-b", issuer, aud, now + 600))))
+		.collect();
+	tokio::task::yield_now().await;
+	assert!(
+		requests.iter().all(|r| !r.is_finished()),
+		"no request is refused while the refresh is in flight"
+	);
+	gate.notify_one();
+	for request in requests {
+		let res = request.await.unwrap();
+		assert!(
+			res.is_ok(),
+			"every request validates after the refresh: {res:?}"
+		);
+	}
+	assert_eq!(asked.load(Ordering::SeqCst), 1, "one call for all ten");
+
+	// A kid the refresh did not bring stays refused, against the interval's answer.
+	let res = apply(build_token("kid-c", issuer, aud, now + 600)).await;
+	assert!(matches!(res, Err(TokenError::UnknownKeyId(kid)) if kid == "kid-c"));
+	assert_eq!(asked.load(Ordering::SeqCst), 1);
+}
