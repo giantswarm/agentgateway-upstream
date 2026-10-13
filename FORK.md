@@ -19,9 +19,9 @@ lines built the same way — kagent [giantswarm/giantswarm#37010](https://github
 | Branch | What it is | Who moves it |
 |---|---|---|
 | `main` | A pure mirror of upstream `main`, fast-forwarded. Never edited, never the target of a pull request. | the sync workflow (as the HeraldBot App); the `protect-main` ruleset admits the App and repository admins (manual repair) and nobody else |
-| `giantswarm` (default) | **The line**: the upstream release tag the platform runs ("the pin") + cherry-picked upstream fixes + this fork's own files. Every change of the fork's own files is a pull request against it. | pull requests (`ci-ok` required); the sync workflow and repository admins may force-push it for a re-pin |
+| `giantswarm` (default) | **The line**: the upstream release tag the platform runs ("the pin") + cherry-picked upstream fixes + this fork's own files. Every change of the fork's own files is a pull request against it. | pull requests (`ci-ok` required); a re-pin lands as the sync workflow's push of a candidate whose head passed `ci-ok` |
 | `fork/<topic>` | pull-request branches against `giantswarm` | anyone in the team |
-| `sync/<date>-<pin>` | hand-over branches the sync workflow opens when a re-pin conflicts | the sync workflow; a human finishes them |
+| `sync/<date>-<pin>` | re-pin candidates: the rebased line, checked by `ci-ok` on their push, landed by the sync workflow | the sync workflow; a human finishes one whose replay conflicted |
 
 The line was bootstrapped on 2026-09-11 by pushing the tag commit of the pin to `giantswarm` by hand (the one push to
 the branch that was not a pull request or a re-pin), then adding the fork's files through pull request #1.
@@ -124,19 +124,25 @@ itself (`git rebase` drops already-applied patches), and its file in `fork/` is 
    protocol (see "Convergence") must both be served by it. The three lines move in one order — this line first, then
    the Substrate line (its chart pins this line's release), then the kagent line (its `go.mod` pins Substrate).
 2. Run **Actions → sync-upstream → Run workflow** with `pin` = the tag or commit (for example `v1.6.0`). The workflow
-   mirrors `main`, rebases the carried patches onto the pin, builds the controller as a smoke, and force-pushes
-   `giantswarm`. The push runs upstream's suite (`pull_request.yml`) and the CircleCI pipeline publishes the dev build.
-   - On a conflict it pushes `sync/<date>-<pin>` (the new pin + the patches that applied before the conflict) and
-     opens a pull request that names the conflicting patch and the ones behind it. Finish it by hand: check the
-     branch out, `git cherry-pick -x` the rest, resolve, test, push the branch (`pull_request.yml` runs `ci-ok` on a
-     `sync/**` push — the pull request itself runs nothing, a rebased branch has no merge commit), then
-     `git push --force-with-lease=refs/heads/giantswarm origin HEAD:giantswarm` and close the pull request. **Do not
-     merge it** — the line is a rebased branch; a merge would fold the old pin back in.
+   mirrors `main`, rebases the carried patches onto the pin, builds the controller as a smoke, pushes the result as the
+   candidate `sync/<date>-<pin>` and opens a pull request against `giantswarm` that records the line head it was
+   replayed from. The candidate's push runs `ci-ok` (`pull_request.yml` runs on `sync/**` pushes — the pull request
+   itself runs nothing, a rebased branch has no merge commit). A new candidate supersedes the older `sync/*` branches:
+   their pull requests are closed and the branches deleted.
+   - On a conflict the candidate holds the new pin + the patches that applied before the conflict, and the pull
+     request names the conflicting patch and the ones behind it. Finish it by hand: check the branch out,
+     `git cherry-pick -x` the rest, resolve, test, push the branch, which runs `ci-ok` on its head.
    - `dry_run: true` does everything except the pushes; the run summary shows the outcome.
-3. Update this file (the pin) and the ledger files in `fork/` (a dropped patch is marked `dropped` or deleted) and the upstream-pin annotation in `.circleci/config.yml`
+3. Once `ci-ok` is green on the candidate's head, run **Actions → sync-upstream → Run workflow** with `land` =
+   `sync/<date>-<pin>`. It lands the candidate only when `ci-ok` passed on its head and `giantswarm` is still at the
+   recorded head: it pushes exactly that commit to `giantswarm` with the lease on that head, closes the pull request
+   and deletes the branch. The push publishes the dev build. **Do not merge the pull request** — the line is a
+   rebased branch; a merge would fold the old pin back in. The `devctl: line gate` ruleset refuses every push to
+   `giantswarm` whose head has not passed `ci-ok`, for every actor, so nobody updates the line by hand.
+4. Update this file (the pin) and the ledger files in `fork/` (a dropped patch is marked `dropped` or deleted) and the upstream-pin annotation in `.circleci/config.yml`
    (`index:io.giantswarm.upstream.version=<pin>`, stamped on every published index) in a pull request, and the
    agentgateway rows of #37742.
-4. Tag a release (`vX.Y.Z` — a re-pin is at least a minor bump, see "Publishing"), move the consumers to it (see
+5. Tag a release (`vX.Y.Z` — a re-pin is at least a minor bump, see "Publishing"), move the consumers to it (see
    "Consumers"), prove it in agentlab — for a move the
    Substrate line depends on, the release is cut once `ci-ok` is green on the exact head (the Substrate chart's
    publish resolves the release image by digest) and its pipeline is green (the images are pushed before the scan,
@@ -181,24 +187,27 @@ re-pin is never a surprise.
 
 **Identity of the automation.** The workflow pushes as the org's **HeraldBot GitHub App** — a token minted per run
 from the org secrets `HERALD_CLIENT_ID` / `HERALD_APP_KEY` (`actions/create-github-app-token`); the App is installed
-on every org repository with contents and workflows write access and is a bypass actor (`Integration`) of both
-rulesets. Why an App and not the org's machine-account token: GitHub refuses a push from a personal access token
+on every org repository with contents and workflows write access and is a bypass actor (`Integration`) of the
+rulesets on `main` and `giantswarm`; on `giantswarm` the line gate still requires `ci-ok` on whatever it pushes. Why an App and not the org's machine-account token: GitHub refuses a push from a personal access token
 that creates or changes a file under `.github/workflows/` unless the token carries the `workflow` scope, and upstream
 `main` — hence every mirror and every re-pin — carries upstream's workflow files. A push with the workflow's own
 `GITHUB_TOKEN` would not do either: it triggers no other workflow, and the push to `giantswarm` is what publishes the
 dev build. The mirror push does start the workflows upstream's own files define on `main` (they ask for Blacksmith
 runners the org does not have); the sync cancels them.
 
-Manual equivalent (a workstation, upstream as a remote):
+Building a candidate by hand (a workstation, upstream as a remote) ends at the candidate's push; the land step
+above lands it:
 
 ```sh
 git fetch upstream main 'refs/tags/v*:refs/tags/v*'
-git checkout giantswarm
-git rebase --onto v1.6.0 "$(git merge-base giantswarm upstream/main)"   # new pin, old pin (a tag or a main commit)
+git checkout -b sync/$(date -u +%Y%m%d)-v1.6.0 origin/giantswarm
+git rebase --onto v1.6.0 "$(git merge-base origin/giantswarm upstream/main)"   # new pin, old pin (a tag or a main commit)
 go build ./... && make lint
-git push origin HEAD:sync/$(date -u +%Y%m%d)-v1.6.0                        # ci-ok on the candidate
-git push --force-with-lease=refs/heads/giantswarm origin HEAD:giantswarm
+git push origin HEAD                                                            # ci-ok on the candidate
 ```
+
+Open its pull request against `giantswarm` with the last body line `Line head: <the full sha of giantswarm it was
+replayed from>`, then run the land step.
 
 ## Publishing
 
