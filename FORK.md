@@ -313,12 +313,13 @@ for a line that rebuilds on re-pins and patches; a persisted cargo cache is an i
 
 ## Contributing
 
-- **Upstream first.** Every behavioural change is a pull request to
-  [agentgateway/agentgateway](https://github.com/agentgateway/agentgateway) with DCO sign-off (`git commit -s`);
-  see upstream's `CONTRIBUTION.md`. The line carries the same change as a `git cherry-pick -x` of the upstream
-  commit (or, before merge, of your pull-request branch) until an upstream release contains it, with a row in
-  #37742. The upstream-facing branch and pull-request text are prepared here and listed in #37742 first; the team
-  reviews that list and sends in batches (the epic's working rule).
+- **Upstream first, prepared here.** Every behavioural change is prepared for upstream
+  ([agentgateway/agentgateway](https://github.com/agentgateway/agentgateway); see upstream's `CONTRIBUTION.md`) as one
+  upstream-ready commit, DCO-signed (`git commit -s`), with no fork references. The commit goes onto the fork with its
+  ledger row in `fork/`, and is pushed as an `upstream/<slug>` branch on this repository. It is queued as a row on
+  [giantswarm/giantswarm#37742](https://github.com/giantswarm/giantswarm/issues/37742). A human decides what goes upstream and opens it; an agent never opens, comments
+  on, reviews or closes a pull request or issue on the upstream repository. The line carries the same change as a
+  `git cherry-pick -x` of the upstream-ready commit until an upstream release contains it, with its row.
 - **Fork-only changes** (workflows, this file): a pull request from `fork/<topic>` against `giantswarm`; squash-merge.
   Cherry-picks of upstream commits are rebase-merged so they keep their patch-id and fall away at the re-pin.
 - **Experiments**: your own personal fork. Branches here exist to become pull requests.
