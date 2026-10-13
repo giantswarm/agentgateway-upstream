@@ -1,7 +1,7 @@
 # The build uses Go 1.27.2 and golang.org/x/net v0.60.0
 
 - **Status:** carried
-- **Upstream:** not for upstream as such: falls away at the re-pin onto the first upstream commit that builds with Go ≥ 1.27.2 and requires `x/net` ≥ v0.60.0 (upstream's dependency automation moves both)
+- **Upstream:** not for upstream as such: falls away at the re-pin onto the first upstream commit that builds with Go ≥ 1.27.2 and requires `x/net` ≥ v0.60.0 (upstream's dependency automation moves both). Upstream `main` @ `c0354ea4` (2026-10-12) requires `x/net` v0.60.0 and still declares `go 1.27.0` with no `toolchain` line, so the `x/net` half is upstream and the Go 1.27.2 toolchain is what remains
 - **Our commit:** the `build: Go 1.27.2 and golang.org/x/net v0.60.0 for govulncheck` commit
 
 ## Change
