@@ -302,6 +302,11 @@ impl H2Pool {
 				debug!("removing past-deadline http2 connection");
 				continue;
 			}
+			if h.load.is_retired() {
+				let _ = self.0.pop_front();
+				debug!("removing retired http2 connection");
+				continue;
+			}
 			match h.load.try_reserve_stream_slot() {
 				CapacityReservationResult::NoCapacity => {
 					// We know the front is the one that was most recently returned, thus must be available
@@ -400,6 +405,13 @@ impl HttpConnection {
 	pub fn past_deadline(&self, now: Instant) -> bool {
 		self.conn_info().past_deadline(now)
 	}
+	/// Returns whether an HTTP/2 connection was retired after the peer refused a stream on it.
+	pub fn is_retired(&self) -> bool {
+		match self {
+			HttpConnection::Http1(_) => false,
+			HttpConnection::Http2(h2) => h2.load.is_retired(),
+		}
+	}
 }
 
 #[derive(Debug)]
@@ -429,6 +441,8 @@ impl ReservedHttp2Connection {
 pub(crate) struct H2Load {
 	active_streams: AtomicUsize,
 	max_streams: AtomicUsize,
+	// Set once the peer refused a stream: the connection takes no new streams.
+	retired: AtomicBool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -443,7 +457,12 @@ impl H2Load {
 		Self {
 			active_streams: AtomicUsize::new(0),
 			max_streams: AtomicUsize::new(max_streams.max(1)),
+			retired: AtomicBool::new(false),
 		}
+	}
+
+	fn is_retired(&self) -> bool {
+		self.retired.load(Ordering::Acquire)
 	}
 
 	fn remaining_capacity(&self) -> usize {
@@ -651,6 +670,10 @@ impl<K: Key> HostPool<K> {
 		// to a request waiting for a connection
 		if conn.past_deadline(settings.timer.now()) {
 			debug!("dropping past-deadline connection for {:?}", key);
+			return;
+		}
+		if conn.is_retired() {
+			debug!("dropping retired connection for {:?}", key);
 			return;
 		}
 		trace!(waiters=%self.waiters.len(), "return idle");
@@ -1140,6 +1163,23 @@ impl<K: Key> Drop for Pooled<K> {
 			// it shouldn't be re-inserted back into the pool.
 			hosts.return_dead_connection(value)
 		}
+	}
+}
+
+impl<K: Key> H2CapacityGuard<K> {
+	/// Retires the connection: it takes no new streams and is dropped instead of parked idle once
+	/// its streams finish. Streams already on it run to completion.
+	pub(crate) fn retire(&self) {
+		let Some((k, load)) = self.value.as_ref() else {
+			return;
+		};
+		load.retired.store(true, Ordering::Release);
+		let Some(pool) = self.pool.upgrade() else {
+			return;
+		};
+		Pool::lock_hosts(pool.as_ref(), k)
+			.active_h2
+			.remove_by_load(load);
 	}
 }
 
