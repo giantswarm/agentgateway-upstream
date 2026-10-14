@@ -1,6 +1,6 @@
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use ::http::{HeaderName, HeaderValue};
 use quick_cache::sync::Cache;
@@ -19,6 +19,7 @@ use crate::{cel, *};
 
 const DEFAULT_CREDENTIAL_CACHE_CAPACITY: usize = 8192;
 const DEFAULT_CREDENTIAL_CACHE_TTL: Duration = Duration::from_secs(300);
+const DEFAULT_ACTOR_JWT_CACHE_CAPACITY: usize = 8192;
 
 /// The inner HTTP transport, independent of the actor's CONNECT transport or URI scheme.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -40,6 +41,9 @@ pub struct SubstrateEgress {
 	#[serde(skip, default = "default_credential_cache")]
 	#[cfg_attr(feature = "schema", schemars(skip))]
 	credential_cache: CredentialCache,
+	#[serde(skip, default = "default_actor_jwt_cache")]
+	#[cfg_attr(feature = "schema", schemars(skip))]
+	actor_jwt_cache: ActorJwtCache,
 }
 
 /// An inline credential-provider backend selected by credential URI authority.
@@ -103,6 +107,63 @@ impl CredentialCache {
 
 fn default_credential_cache() -> CredentialCache {
 	CredentialCache::new(DEFAULT_CREDENTIAL_CACHE_CAPACITY)
+}
+
+/// Actor JWTs minted through `Control.MintActorJWT`, each reused until a third of its lifetime
+/// remains. Concurrent misses for one key share a single mint.
+#[derive(Debug, Clone)]
+struct ActorJwtCache {
+	entries: Arc<Cache<ActorJwtCacheKey, CachedActorJwt>>,
+}
+
+/// The token a mint request asks for: the actor by name (an actor recreated under the same name
+/// can get its predecessor's token until the refresh point), the sorted audiences and the lifetime.
+#[derive(Clone, Hash, PartialEq, Eq)]
+struct ActorJwtCacheKey {
+	atespace: String,
+	actor_name: String,
+	audiences: Vec<String>,
+	expiration_seconds: i64,
+}
+
+#[derive(Clone)]
+struct CachedActorJwt {
+	jwt: String,
+	refresh_at: Instant,
+}
+
+impl ActorJwtCacheKey {
+	fn new(identity: &ActorIdentity, source: &protos::ateapi::ActorJwtSource) -> Self {
+		let mut audiences = source.audiences.clone();
+		audiences.sort();
+		Self {
+			atespace: identity.atespace.clone(),
+			actor_name: identity.actor_name.clone(),
+			audiences,
+			expiration_seconds: source.expiration_seconds,
+		}
+	}
+}
+
+fn default_actor_jwt_cache() -> ActorJwtCache {
+	ActorJwtCache {
+		entries: Arc::new(Cache::new(DEFAULT_ACTOR_JWT_CACHE_CAPACITY)),
+	}
+}
+
+/// When a token minted with `expiration_seconds` that expires at `expire_time` stops being reused:
+/// once a third of its lifetime remains. None when that point has already passed.
+fn actor_jwt_refresh_at(
+	expire_time: Option<prost_types::Timestamp>,
+	expiration_seconds: i64,
+	now: Instant,
+	wall_now: SystemTime,
+) -> Option<Instant> {
+	let expires = SystemTime::try_from(expire_time?).ok()?;
+	let remaining = expires.duration_since(wall_now).ok()?;
+	let lifetime = Duration::from_secs(u64::try_from(expiration_seconds).ok()?);
+	let reuse_for = remaining.checked_sub(lifetime / 3)?;
+	(!reuse_for.is_zero()).then(|| now + reuse_for)
 }
 
 impl RequestPolicyTrait for SubstrateEgress {
@@ -183,10 +244,15 @@ impl SubstrateEgress {
 			if !req.headers().contains_key(&injection.header) {
 				continue;
 			}
-			let provider = self.provider_for_uri(&injection.credential_uri)?;
-			let secret = self
-				.credential(client, identity, provider, &injection.credential_uri)
-				.await?;
+			let secret = match &injection.actor_jwt {
+				Some(source) => self.actor_jwt(client, identity, source).await?,
+				None => {
+					let provider = self.provider_for_uri(&injection.credential_uri)?;
+					self
+						.credential(client, identity, provider, &injection.credential_uri)
+						.await?
+				},
+			};
 			let (name, value) = credential_header(injection, secret)?;
 			req.headers_mut().insert(name, value);
 		}
@@ -240,6 +306,54 @@ impl SubstrateEgress {
 			.credential_cache
 			.insert(key, secret.clone(), Instant::now());
 		Ok(secret)
+	}
+
+	/// Mints, or reuses, the actor JWT `source` asks for. It needs no credential provider.
+	async fn actor_jwt(
+		&self,
+		client: &PolicyClient,
+		identity: &ActorIdentity,
+		source: &protos::ateapi::ActorJwtSource,
+	) -> Result<Vec<u8>, ProxyResponse> {
+		let key = ActorJwtCacheKey::new(identity, source);
+		loop {
+			let guard = match self
+				.actor_jwt_cache
+				.entries
+				.get_value_or_guard_async(&key)
+				.await
+			{
+				Ok(cached) if Instant::now() < cached.refresh_at => return Ok(cached.jwt.into_bytes()),
+				Ok(stale) => {
+					self
+						.actor_jwt_cache
+						.entries
+						.remove_if(&key, |entry| entry.refresh_at == stale.refresh_at);
+					continue;
+				},
+				Err(guard) => guard,
+			};
+			let response = mint_actor_jwt(&self.target, client, &key).await?;
+			let jwt = response.actor_jwt;
+			if jwt.is_empty() || !jwt.bytes().all(|byte| byte.is_ascii_graphic()) {
+				return Err(
+					ProxyError::SubstrateEgressInternal("ateapi minted an unusable actor JWT".to_owned())
+						.into(),
+				);
+			}
+			if let Some(refresh_at) = actor_jwt_refresh_at(
+				response.expire_time,
+				key.expiration_seconds,
+				Instant::now(),
+				SystemTime::now(),
+			) {
+				let _ = guard.insert(CachedActorJwt {
+					jwt: jwt.clone(),
+					refresh_at,
+				});
+			}
+			return Ok(jwt.into_bytes());
+		}
 	}
 
 	fn provider_for_uri(&self, uri: &str) -> Result<&CredentialProvider, ProxyResponse> {
@@ -371,6 +485,64 @@ async fn fetch_policy(
 		Err(status) => Err(ProxyError::SubstrateEgressDenied(format!(
 			"actor egress policy denied: {status}"
 		))),
+	}
+}
+
+async fn mint_actor_jwt(
+	target: &SimpleBackendReferenceWithPolicies,
+	client: &PolicyClient,
+	key: &ActorJwtCacheKey,
+) -> Result<protos::ateapi::MintActorJwtResponse, ProxyError> {
+	let policy_client =
+		client.with_outbound(OutboundCallKind::Policy, OutboundCallSubtype::Substrate);
+	let channel = target.grpc_channel(policy_client.clone());
+	let mut control = protos::ateapi::control_client::ControlClient::new(channel);
+	let mut request = tonic::Request::new(protos::ateapi::MintActorJwtRequest {
+		actor: Some(protos::ateapi::ObjectRef {
+			atespace: key.atespace.clone(),
+			name: key.actor_name.clone(),
+		}),
+		audiences: key.audiences.clone(),
+		expiration_seconds: key.expiration_seconds,
+	});
+	let mut span = policy_client.start_grpc_span(
+		&mut request,
+		target.target.as_ref(),
+		"/ateapi.Control/MintActorJWT",
+	);
+	let response =
+		crate::proxy::dtrace::scope_future(Some(TRACE_POLICY_KIND), control.mint_actor_jwt(request))
+			.await;
+	if let Some(span) = span.as_deref_mut() {
+		span.record_grpc_result(&response);
+	}
+	drop(span);
+	response.map(tonic::Response::into_inner).map_err(|status| {
+		warn!(
+			actor = key.actor_name,
+			atespace = key.atespace,
+			audiences = ?key.audiences,
+			grpc.code = ?status.code(),
+			grpc.message = status.message(),
+			error = %status,
+			"substrate control API refused MintActorJWT"
+		);
+		actor_jwt_error(&status)
+	})
+}
+
+/// Maps a MintActorJWT failure to what the actor sees: an actor that is gone is 403, an
+/// unavailable or slow control API a retryable 503, anything else (a gateway or policy
+/// misconfiguration retrying cannot fix) 500. Same classes as Substrate's own egress minter.
+fn actor_jwt_error(status: &tonic::Status) -> ProxyError {
+	match status.code() {
+		Code::Unavailable | Code::DeadlineExceeded => {
+			ProxyError::SubstrateEgressUnavailable("actor JWT mint unavailable".to_owned())
+		},
+		Code::NotFound => {
+			ProxyError::SubstrateEgressDenied("actor JWT mint denied: actor not found".to_owned())
+		},
+		_ => ProxyError::SubstrateEgressInternal("actor JWT mint failed".to_owned()),
 	}
 }
 
@@ -896,6 +1068,7 @@ mod tests {
 				header: "authorization".to_owned(),
 				prefix: "Bearer ".to_owned(),
 				credential_uri: "ate-secret://kubernetes.io/default/token".to_owned(),
+				..Default::default()
 			},
 			b"token\n".to_vec(),
 		)
@@ -923,6 +1096,7 @@ mod tests {
 				header: header.to_owned(),
 				prefix: String::new(),
 				credential_uri: "ate-secret://kubernetes.io/default/token".to_owned(),
+				..Default::default()
 			};
 			assert!(credential_header(&injection, b"token".to_vec()).is_err());
 		}
@@ -953,6 +1127,7 @@ mod tests {
 			header: "authorization".to_owned(),
 			prefix: "Bearer ".to_owned(),
 			credential_uri: "ate-secret://kubernetes.io/default/token".to_owned(),
+			..Default::default()
 		};
 		assert!(credential_header(&injection, Vec::new()).is_err());
 		assert!(credential_header(&injection, b"bad\nsecret".to_vec()).is_err());
@@ -1020,5 +1195,376 @@ mod tests {
 			provider.target.target.as_ref(),
 			crate::types::agent::SimpleBackendReference::InlineBackend(_)
 		));
+	}
+
+	mod actor_jwt {
+		use std::sync::Mutex;
+		use std::sync::atomic::{AtomicUsize, Ordering};
+
+		use protos::ateapi::{
+			ActorJwtSource, CredentialHeader, MintActorJwtRequest, MintActorJwtResponse,
+		};
+
+		use super::*;
+		use crate::test_helpers::{MockInstance, ateapimock, policy_client};
+
+		const LIFETIME: i64 = 600;
+
+		#[derive(Clone)]
+		struct Minter {
+			requests: Arc<Mutex<Vec<MintActorJwtRequest>>>,
+			mints: Arc<AtomicUsize>,
+			/// The token's remaining lifetime when it is minted, or the code the mint fails with.
+			answer: Result<Duration, Code>,
+			jwt: &'static str,
+			delay: Duration,
+		}
+
+		impl Minter {
+			fn new(answer: Result<Duration, Code>) -> Self {
+				Self {
+					requests: Default::default(),
+					mints: Default::default(),
+					answer,
+					jwt: "jwt",
+					delay: Duration::ZERO,
+				}
+			}
+
+			fn mints(&self) -> usize {
+				self.mints.load(Ordering::SeqCst)
+			}
+		}
+
+		#[async_trait::async_trait]
+		impl ateapimock::Handler for Minter {
+			async fn mint_actor_jwt(
+				&mut self,
+				request: &MintActorJwtRequest,
+			) -> Result<MintActorJwtResponse, tonic::Status> {
+				self.requests.lock().unwrap().push(request.clone());
+				tokio::time::sleep(self.delay).await;
+				let mint = self.mints.fetch_add(1, Ordering::SeqCst) + 1;
+				let remaining = self
+					.answer
+					.map_err(|code| tonic::Status::new(code, "mint refused"))?;
+				Ok(MintActorJwtResponse {
+					actor_jwt: if self.jwt.is_empty() {
+						String::new()
+					} else {
+						format!("{}-{mint}", self.jwt)
+					},
+					expire_time: Some((SystemTime::now() + remaining).into()),
+				})
+			}
+		}
+
+		async fn egress(minter: &Minter) -> (SubstrateEgress, MockInstance) {
+			let handler = minter.clone();
+			let api = ateapimock::AteApiMock::new(move || handler.clone())
+				.spawn()
+				.await;
+			(egress_at(&api.address.to_string()), api)
+		}
+
+		fn egress_at(host: &str) -> SubstrateEgress {
+			serde_json::from_value(serde_json::json!({ "host": host })).unwrap()
+		}
+
+		fn identity() -> ActorIdentity {
+			ActorIdentity {
+				atespace: "demo".to_owned(),
+				actor_name: "my-actor".to_owned(),
+				actor_uid: None,
+			}
+		}
+
+		fn effects(audiences: &[&str], expiration_seconds: i64) -> protos::ateapi::HttpRuleEffects {
+			protos::ateapi::HttpRuleEffects {
+				replace_headers: vec![CredentialHeader {
+					header: "authorization".to_owned(),
+					prefix: "Bearer ".to_owned(),
+					actor_jwt: Some(ActorJwtSource {
+						audiences: audiences
+							.iter()
+							.map(|audience| (*audience).to_owned())
+							.collect(),
+						expiration_seconds,
+					}),
+					..Default::default()
+				}],
+			}
+		}
+
+		fn placeholder_request() -> Request {
+			::http::Request::builder()
+				.uri("http://api.example.com/repos")
+				.header("authorization", "placeholder")
+				.body(crate::http::Body::empty())
+				.unwrap()
+		}
+
+		async fn apply(
+			egress: &SubstrateEgress,
+			effects: &protos::ateapi::HttpRuleEffects,
+			req: &mut Request,
+		) -> Result<(), ProxyResponse> {
+			egress
+				.apply_effects(&policy_client(), &identity(), Some(effects), req)
+				.await
+		}
+
+		async fn authorization(
+			egress: &SubstrateEgress,
+			effects: &protos::ateapi::HttpRuleEffects,
+		) -> String {
+			let mut req = placeholder_request();
+			apply(egress, effects, &mut req).await.unwrap();
+			let value = req.headers().get("authorization").unwrap();
+			assert!(value.is_sensitive());
+			value.to_str().unwrap().to_owned()
+		}
+
+		fn status(result: Result<(), ProxyResponse>) -> ::http::StatusCode {
+			match result.unwrap_err() {
+				ProxyResponse::Error(error) => error.into_response_with_grpc(false).status(),
+				ProxyResponse::DirectResponse(response) => response.status(),
+			}
+		}
+
+		#[tokio::test]
+		async fn injects_a_minted_jwt_for_the_actor_without_a_credential_provider() {
+			let minter = Minter::new(Ok(Duration::from_secs(LIFETIME as u64)));
+			let (egress, _api) = egress(&minter).await;
+			assert!(egress.credential_providers.is_empty());
+
+			let effects = effects(&["https://b.example", "https://a.example"], LIFETIME);
+			assert_eq!(authorization(&egress, &effects).await, "Bearer jwt-1");
+
+			let requests = minter.requests.lock().unwrap().clone();
+			assert_eq!(
+				requests,
+				vec![MintActorJwtRequest {
+					actor: Some(protos::ateapi::ObjectRef {
+						atespace: "demo".to_owned(),
+						name: "my-actor".to_owned(),
+					}),
+					audiences: vec![
+						"https://a.example".to_owned(),
+						"https://b.example".to_owned()
+					],
+					expiration_seconds: LIFETIME,
+				}]
+			);
+		}
+
+		/// Substrate serves the mint as `/ateapi.Control/MintActorJWT`, and gRPC method names are
+		/// case-sensitive. The client and the mock are generated from the same proto, so this pins
+		/// the path both use to the one Substrate answers.
+		#[tokio::test]
+		async fn mints_through_substrates_method_path() {
+			use tower::ServiceExt;
+
+			let minter = Minter::new(Ok(Duration::from_secs(LIFETIME as u64)));
+			let handler = minter.clone();
+			let server = protos::ateapi::control_server::ControlServer::new(ateapimock::AteApiMock::new(
+				move || handler.clone(),
+			));
+			// An empty, uncompressed gRPC message: a MintActorJwtRequest with every field default.
+			let body = http_body_util::Full::new(bytes::Bytes::from_static(&[0, 0, 0, 0, 0]));
+			let request = ::http::Request::builder()
+				.method(::http::Method::POST)
+				.uri("/ateapi.Control/MintActorJWT")
+				.header("content-type", "application/grpc")
+				.header("te", "trailers")
+				.body(tonic::body::Body::new(body))
+				.unwrap();
+			let response = server.oneshot(request).await.unwrap();
+
+			assert_eq!(response.status(), ::http::StatusCode::OK);
+			assert!(response.headers().get("grpc-status").is_none());
+			assert_eq!(minter.mints(), 1);
+		}
+
+		#[tokio::test]
+		async fn reuses_a_token_per_actor_audiences_and_lifetime() {
+			let minter = Minter::new(Ok(Duration::from_secs(LIFETIME as u64)));
+			let (egress, _api) = egress(&minter).await;
+
+			let effects_ab = effects(&["a", "b"], LIFETIME);
+			assert_eq!(authorization(&egress, &effects_ab).await, "Bearer jwt-1");
+			assert_eq!(authorization(&egress, &effects_ab).await, "Bearer jwt-1");
+			// The audiences' order does not make another token.
+			let effects_ba = effects(&["b", "a"], LIFETIME);
+			assert_eq!(authorization(&egress, &effects_ba).await, "Bearer jwt-1");
+			assert_eq!(minter.mints(), 1);
+
+			// Other audiences or another lifetime do.
+			assert_eq!(
+				authorization(&egress, &effects(&["a"], LIFETIME)).await,
+				"Bearer jwt-2"
+			);
+			assert_eq!(
+				authorization(&egress, &effects(&["a", "b"], 300)).await,
+				"Bearer jwt-3"
+			);
+			assert_eq!(minter.mints(), 3);
+
+			// Another actor does too.
+			let mut req = placeholder_request();
+			let other = ActorIdentity {
+				actor_name: "other-actor".to_owned(),
+				..identity()
+			};
+			egress
+				.apply_effects(&policy_client(), &other, Some(&effects_ab), &mut req)
+				.await
+				.unwrap();
+			assert_eq!(req.headers()["authorization"], "Bearer jwt-4");
+		}
+
+		#[tokio::test]
+		async fn mints_again_once_a_third_of_the_lifetime_remains() {
+			// A token minted with a third of its lifetime left is used, never reused.
+			let minter = Minter::new(Ok(Duration::from_secs(LIFETIME as u64 / 3)));
+			let (egress, _api) = egress(&minter).await;
+			let effects = effects(&["a"], LIFETIME);
+			assert_eq!(authorization(&egress, &effects).await, "Bearer jwt-1");
+			assert_eq!(authorization(&egress, &effects).await, "Bearer jwt-2");
+		}
+
+		#[test]
+		fn a_token_is_reused_until_a_third_of_its_lifetime_remains() {
+			let now = Instant::now();
+			let wall_now = SystemTime::now();
+			let expires_in = |seconds: u64| Some((wall_now + Duration::from_secs(seconds)).into());
+			assert_eq!(
+				actor_jwt_refresh_at(expires_in(600), 600, now, wall_now),
+				Some(now + Duration::from_secs(400))
+			);
+			// Minted a minute ago: reused for its remaining 340 seconds less 200.
+			assert_eq!(
+				actor_jwt_refresh_at(expires_in(540), 600, now, wall_now),
+				Some(now + Duration::from_secs(340))
+			);
+			assert_eq!(
+				actor_jwt_refresh_at(expires_in(200), 600, now, wall_now),
+				None
+			);
+			assert_eq!(
+				actor_jwt_refresh_at(expires_in(100), 600, now, wall_now),
+				None
+			);
+			assert_eq!(
+				actor_jwt_refresh_at(
+					Some((wall_now - Duration::from_secs(1)).into()),
+					600,
+					now,
+					wall_now
+				),
+				None
+			);
+			assert_eq!(actor_jwt_refresh_at(None, 600, now, wall_now), None);
+		}
+
+		#[tokio::test]
+		async fn concurrent_requests_share_one_mint() {
+			let mut minter = Minter::new(Ok(Duration::from_secs(LIFETIME as u64)));
+			minter.delay = Duration::from_millis(100);
+			let (egress, _api) = egress(&minter).await;
+			let effects = effects(&["a"], LIFETIME);
+			let tokens =
+				futures_util::future::join_all((0..8).map(|_| authorization(&egress, &effects))).await;
+			assert!(
+				tokens.iter().all(|token| token == "Bearer jwt-1"),
+				"{tokens:?}"
+			);
+			assert_eq!(minter.mints(), 1);
+		}
+
+		#[tokio::test]
+		async fn a_request_without_the_header_is_forwarded_unchanged_without_a_mint() {
+			let minter = Minter::new(Ok(Duration::from_secs(LIFETIME as u64)));
+			let (egress, _api) = egress(&minter).await;
+			let mut req = ::http::Request::builder()
+				.uri("http://api.example.com/repos")
+				.header("x-other", "kept")
+				.body(crate::http::Body::empty())
+				.unwrap();
+			apply(&egress, &effects(&["a"], LIFETIME), &mut req)
+				.await
+				.unwrap();
+			assert!(req.headers().get("authorization").is_none());
+			assert_eq!(req.headers()["x-other"], "kept");
+			assert_eq!(minter.mints(), 0);
+		}
+
+		#[tokio::test]
+		async fn a_failed_mint_denies_the_request_by_its_class() {
+			for (code, want) in [
+				(Code::NotFound, ::http::StatusCode::FORBIDDEN),
+				(Code::Unavailable, ::http::StatusCode::SERVICE_UNAVAILABLE),
+				(
+					Code::DeadlineExceeded,
+					::http::StatusCode::SERVICE_UNAVAILABLE,
+				),
+				(
+					Code::PermissionDenied,
+					::http::StatusCode::INTERNAL_SERVER_ERROR,
+				),
+				(
+					Code::InvalidArgument,
+					::http::StatusCode::INTERNAL_SERVER_ERROR,
+				),
+				(Code::Internal, ::http::StatusCode::INTERNAL_SERVER_ERROR),
+				(
+					Code::Unimplemented,
+					::http::StatusCode::INTERNAL_SERVER_ERROR,
+				),
+			] {
+				let minter = Minter::new(Err(code));
+				let (egress, _api) = egress(&minter).await;
+				let effects = effects(&["a"], LIFETIME);
+				let mut req = placeholder_request();
+				assert_eq!(
+					status(apply(&egress, &effects, &mut req).await),
+					want,
+					"{code:?}"
+				);
+				// A failure is not cached: the next request asks again.
+				let mut req = placeholder_request();
+				assert_eq!(
+					status(apply(&egress, &effects, &mut req).await),
+					want,
+					"{code:?}"
+				);
+				assert_eq!(minter.mints(), 2, "{code:?}");
+			}
+		}
+
+		#[tokio::test]
+		async fn an_unreachable_control_api_is_unavailable() {
+			let unused = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+			let address = unused.local_addr().unwrap();
+			drop(unused);
+			let egress = egress_at(&address.to_string());
+			let mut req = placeholder_request();
+			assert_eq!(
+				status(apply(&egress, &effects(&["a"], LIFETIME), &mut req).await),
+				::http::StatusCode::SERVICE_UNAVAILABLE
+			);
+		}
+
+		#[tokio::test]
+		async fn an_empty_minted_jwt_is_an_internal_error() {
+			let mut minter = Minter::new(Ok(Duration::from_secs(LIFETIME as u64)));
+			minter.jwt = "";
+			let (egress, _api) = egress(&minter).await;
+			let mut req = placeholder_request();
+			assert_eq!(
+				status(apply(&egress, &effects(&["a"], LIFETIME), &mut req).await),
+				::http::StatusCode::INTERNAL_SERVER_ERROR
+			);
+		}
 	}
 }
