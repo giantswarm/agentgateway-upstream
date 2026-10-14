@@ -39,7 +39,7 @@ pub trait Handler {
 		&mut self,
 		_request: &MintActorJwtRequest,
 	) -> Result<MintActorJwtResponse, Status> {
-		Err(Status::unimplemented("MintActorJwt is not implemented"))
+		Err(Status::unimplemented("MintActorJWT is not implemented"))
 	}
 }
 

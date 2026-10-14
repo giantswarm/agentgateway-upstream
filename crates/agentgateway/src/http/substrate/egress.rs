@@ -109,7 +109,7 @@ fn default_credential_cache() -> CredentialCache {
 	CredentialCache::new(DEFAULT_CREDENTIAL_CACHE_CAPACITY)
 }
 
-/// Actor JWTs minted through `Control.MintActorJwt`, each reused until a third of its lifetime
+/// Actor JWTs minted through `Control.MintActorJWT`, each reused until a third of its lifetime
 /// remains. Concurrent misses for one key share a single mint.
 #[derive(Debug, Clone)]
 struct ActorJwtCache {
@@ -508,7 +508,7 @@ async fn mint_actor_jwt(
 	let mut span = policy_client.start_grpc_span(
 		&mut request,
 		target.target.as_ref(),
-		"/ateapi.Control/MintActorJwt",
+		"/ateapi.Control/MintActorJWT",
 	);
 	let response =
 		crate::proxy::dtrace::scope_future(Some(TRACE_POLICY_KIND), control.mint_actor_jwt(request))
@@ -525,13 +525,13 @@ async fn mint_actor_jwt(
 			grpc.code = ?status.code(),
 			grpc.message = status.message(),
 			error = %status,
-			"substrate control API refused MintActorJwt"
+			"substrate control API refused MintActorJWT"
 		);
 		actor_jwt_error(&status)
 	})
 }
 
-/// Maps a MintActorJwt failure to what the actor sees: an actor that is gone is 403, an
+/// Maps a MintActorJWT failure to what the actor sees: an actor that is gone is 403, an
 /// unavailable or slow control API a retryable 503, anything else (a gateway or policy
 /// misconfiguration retrying cannot fix) 500. Same classes as Substrate's own egress minter.
 fn actor_jwt_error(status: &tonic::Status) -> ProxyError {
@@ -1356,6 +1356,34 @@ mod tests {
 					expiration_seconds: LIFETIME,
 				}]
 			);
+		}
+
+		/// Substrate serves the mint as `/ateapi.Control/MintActorJWT`, and gRPC method names are
+		/// case-sensitive. The client and the mock are generated from the same proto, so this pins
+		/// the path both use to the one Substrate answers.
+		#[tokio::test]
+		async fn mints_through_substrates_method_path() {
+			use tower::ServiceExt;
+
+			let minter = Minter::new(Ok(Duration::from_secs(LIFETIME as u64)));
+			let handler = minter.clone();
+			let server = protos::ateapi::control_server::ControlServer::new(
+				ateapimock::AteApiMock::new(move || handler.clone()),
+			);
+			// An empty, uncompressed gRPC message: a MintActorJwtRequest with every field default.
+			let body = http_body_util::Full::new(bytes::Bytes::from_static(&[0, 0, 0, 0, 0]));
+			let request = ::http::Request::builder()
+				.method(::http::Method::POST)
+				.uri("/ateapi.Control/MintActorJWT")
+				.header("content-type", "application/grpc")
+				.header("te", "trailers")
+				.body(tonic::body::Body::new(body))
+				.unwrap();
+			let response = server.oneshot(request).await.unwrap();
+
+			assert_eq!(response.status(), ::http::StatusCode::OK);
+			assert!(response.headers().get("grpc-status").is_none());
+			assert_eq!(minter.mints(), 1);
 		}
 
 		#[tokio::test]
