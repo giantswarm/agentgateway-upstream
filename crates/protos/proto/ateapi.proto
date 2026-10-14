@@ -10,7 +10,7 @@ service Control {
   rpc GetActor(GetActorRequest) returns (Actor) {}
   rpc ResumeActor(ResumeActorRequest) returns (ResumeActorResponse) {}
   rpc GetActorEgressPolicy(GetActorEgressPolicyRequest) returns (EgressPolicy) {}
-  rpc MintActorJwt(MintActorJwtRequest) returns (MintActorJwtResponse) {}
+  rpc MintActorJWT(MintActorJWTRequest) returns (MintActorJWTResponse) {}
 }
 
 message Actor {
@@ -116,7 +116,7 @@ message CredentialHeader {
   // Exactly one of credential_uri and actor_jwt is set.
   string credential_uri = 3;
   // A Substrate-issued JWT for the actor that sent the request, minted
-  // through Control.MintActorJwt.
+  // through Control.MintActorJWT.
   ActorJWTSource actor_jwt = 4;
   // Scopes the replacement to requests whose path, without its query, lies
   // under this prefix at a segment boundary. Empty applies to every path. Per
@@ -137,13 +137,13 @@ message GetActorEgressPolicyRequest {
   ObjectRef actor = 1;
 }
 
-message MintActorJwtRequest {
+message MintActorJWTRequest {
   ObjectRef actor = 5;
   repeated string audiences = 1;
   int64 expiration_seconds = 8;
 }
 
-message MintActorJwtResponse {
+message MintActorJWTResponse {
   string actor_jwt = 1;
   // When actor_jwt expires, equal to its exp claim.
   google.protobuf.Timestamp expire_time = 2;
