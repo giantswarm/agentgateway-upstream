@@ -263,7 +263,8 @@ where
 
 			// Retries must not accumulate multiple stream guards on the same body.
 			req.body_mut().clear_keep_alive();
-			let shared_guard = ErasedH2Guard::new(Arc::new(guard));
+			let guard = Arc::new(guard);
+			let shared_guard = ErasedH2Guard::new(guard.clone());
 			req.body_mut().set_keep_alive(shared_guard.clone());
 
 			let mut res = match h2.tx.try_send_request(req).await {
@@ -277,9 +278,12 @@ where
 							req,
 						})
 					} else {
-						Err(TrySendError::Nope(
-							e!(SendRequest, err.into_error()).with_connect_info(h2.info.clone()),
-						))
+						let error = e!(SendRequest, err.into_error()).with_connect_info(h2.info.clone());
+						if error.is_unprocessed() {
+							// The peer refuses streams on this connection; a retry must not land here again.
+							guard.retire();
+						}
+						Err(TrySendError::Nope(error))
 					};
 				},
 			};
@@ -1327,6 +1331,23 @@ impl Error {
 	/// Returns true if establishing the connection exceeded its configured timeout.
 	pub fn is_connect_timeout(&self) -> bool {
 		matches!(self.kind, ErrorKind::ConnectTimeout)
+	}
+
+	/// Returns true if the upstream never processed the request: its HTTP/2 stream was reset with
+	/// `REFUSED_STREAM`, or it was above the last stream id of the peer's `GOAWAY`. Such a request
+	/// is safe to retry on another connection, whatever its method (RFC 9113, section 8.7).
+	pub fn is_unprocessed(&self) -> bool {
+		let mut cause = StdError::source(self);
+		while let Some(err) = cause {
+			if let Some(h2) = err.downcast_ref::<h2::Error>() {
+				// A remote GOAWAY reaches only the streams above its last stream id; the processed
+				// ones end with the connection's I/O error instead.
+				return h2.is_remote()
+					&& (h2.is_go_away() || h2.reason() == Some(h2::Reason::REFUSED_STREAM));
+			}
+			cause = err.source();
+		}
+		false
 	}
 
 	/// Returns the info of the client connection on which this error occurred.

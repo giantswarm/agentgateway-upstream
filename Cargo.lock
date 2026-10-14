@@ -182,6 +182,7 @@ dependencies = [
  "futures-channel",
  "futures-core",
  "futures-util",
+ "h2",
  "hashbrown 0.17.1",
  "http 1.5.0",
  "http-body-util",
