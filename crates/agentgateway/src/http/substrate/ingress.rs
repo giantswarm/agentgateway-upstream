@@ -754,7 +754,7 @@ mod tests {
 	use protos::ateapi::control_server::{Control, ControlServer};
 	use protos::ateapi::{
 		Actor, ActorStatus, EgressPolicy, GetActorEgressPolicyRequest, GetActorRequest,
-		ResumeActorRequest, ResumeActorResponse,
+		MintActorJwtRequest, MintActorJwtResponse, ResumeActorRequest, ResumeActorResponse,
 	};
 	use tonic::{Request as GrpcRequest, Response as GrpcResponse, Status};
 	use wiremock::matchers::{header, method};
@@ -825,6 +825,13 @@ mod tests {
 			&self,
 			_request: GrpcRequest<GetActorEgressPolicyRequest>,
 		) -> Result<GrpcResponse<EgressPolicy>, Status> {
+			Err(Status::unimplemented("not used"))
+		}
+
+		async fn mint_actor_jwt(
+			&self,
+			_request: GrpcRequest<MintActorJwtRequest>,
+		) -> Result<GrpcResponse<MintActorJwtResponse>, Status> {
 			Err(Status::unimplemented("not used"))
 		}
 	}

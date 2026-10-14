@@ -72,6 +72,7 @@ impl ProxyError {
 			| ProxyError::ProcessingString(_)
 			| ProxyError::Processing(_)
 			| ProxyError::SubstrateEgressUnavailable(_)
+			| ProxyError::SubstrateEgressInternal(_)
 			| ProxyError::RouteCycleDetected
 			| ProxyError::Body(_)
 			| ProxyError::Http(_)
@@ -256,6 +257,8 @@ pub enum ProxyError {
 	SubstrateEgressDenied(String),
 	#[error("{0}")]
 	SubstrateEgressUnavailable(String),
+	#[error("{0}")]
+	SubstrateEgressInternal(String),
 	#[error("rate limit exceeded")]
 	RateLimitExceeded {
 		limit: u64,
@@ -439,6 +442,7 @@ impl ProxyError {
 			ProxyError::AuthorizationFailed => StatusCode::FORBIDDEN,
 			ProxyError::SubstrateEgressDenied(_) => StatusCode::FORBIDDEN,
 			ProxyError::SubstrateEgressUnavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
+			ProxyError::SubstrateEgressInternal(_) => StatusCode::INTERNAL_SERVER_ERROR,
 			ProxyError::ExternalAuthorizationFailed(status) => status.unwrap_or(StatusCode::FORBIDDEN),
 
 			ProxyError::DnsResolution => StatusCode::SERVICE_UNAVAILABLE,

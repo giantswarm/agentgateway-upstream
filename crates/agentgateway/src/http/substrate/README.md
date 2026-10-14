@@ -47,3 +47,9 @@ Exact names rank ahead of single-label wildcards, then `*`; explicit ports rank
 ahead of all ports. Omitted HTTP/HTTPS ports default to 80/443. Passthrough requires
 ports. `replace_headers` resolves credentials only for headers already present
 in the actor's request, replacing any placeholder value.
+An entry with `actor_jwt` carries a JWT the gateway mints for the actor through
+`Control.MintActorJwt` on the `substrateEgress` backend, bound to the entry's
+audiences and lifetime; it needs no credential provider. A token is reused per
+actor, audiences and lifetime until a third of its lifetime remains. A failed
+mint denies the request: 403 when the actor is gone, 503 when the control API
+is unavailable or times out, 500 otherwise.
