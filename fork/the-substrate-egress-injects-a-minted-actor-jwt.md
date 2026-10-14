@@ -1,0 +1,15 @@
+# The Substrate egress injects an actor JWT it mints through Control.MintActorJwt
+
+- **Status:** carried
+- **Upstream:** to file — prepared in the fork: branch [`upstream/substrate-egress-actor-jwt`](https://github.com/giantswarm/agentgateway-upstream/tree/upstream/substrate-egress-actor-jwt) on upstream `main` @ `e523afba` (commit `3902417a`), queued in the team's upstream review list (giantswarm/giantswarm#37742). It follows Substrate's actor-JWT injection on its Envoy egress ([agent-substrate/substrate#1960](https://github.com/agent-substrate/substrate/pull/1960), [#2135](https://github.com/agent-substrate/substrate/pull/2135), [#2141](https://github.com/agent-substrate/substrate/pull/2141), [#2421](https://github.com/agent-substrate/substrate/pull/2421)).
+- **Our commit:** the `feat(substrate): inject an actor JWT minted through Control.MintActorJwt` commit on `giantswarm`, a `cherry-pick -x` of the upstream branch's commit (`substrate: …` upstream), from [#79](https://github.com/giantswarm/agentgateway-upstream/issues/79)
+
+## Change
+
+`crates/protos/proto/ateapi.proto` gains `CredentialHeader.actor_jwt` (field 4, `ActorJWTSource` with `audiences` and `expiration_seconds`) and the `Control.MintActorJwt` call. `SubstrateEgress::apply_effects` (`crates/agentgateway/src/http/substrate/egress.rs`) injects, for an `actor_jwt` entry whose header the request carries, `<prefix><token>` minted through `MintActorJwt` on the policy's own control API backend (`actor_jwt`, `mint_actor_jwt`), with no credential provider. Tokens are cached per actor name, sorted audiences and lifetime and reused until a third of their lifetime remains (`actor_jwt_refresh_at`); concurrent misses share one mint. A failed mint denies the request: 403 when the actor is gone (`NotFound`), 503 when the control API is unavailable or times out, 500 otherwise (`ProxyError::SubstrateEgressInternal`), as Substrate's `mapActorJWTError`. On the line, "unavailable" is `policy_service_unavailable`, which also reads an unreachable service as unavailable.
+
+## Reason
+
+Upstream Substrate's egress policy carries an `actor_jwt` source (Substrate 1.9.1 on the line). Without this change the agentgateway egress read every entry as an `ate-secret://` URI and denied an `actor_jwt` entry with `403 invalid credential URI: `, which blocks the per-Session caller credential of giantswarm/kagent-upstream#297. The Substrate line pins the release that carries it (giantswarm/substrate#419).
+
+Drops at the re-pin onto an upstream commit that contains the upstream change.
