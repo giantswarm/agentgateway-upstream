@@ -1181,11 +1181,12 @@ impl HTTPProxy {
 		llm_request_policies.llm = route_llm;
 		let llm_request_policies = Arc::new(llm_request_policies);
 
-		// attempts is the total number of attempts, not the retries
+		// attempts is the total number of attempts, not the retries. Without a policy, one retry is
+		// kept for a request the upstream never processed (see `is_unprocessed`).
 		let attempts = if substrate_default_retry {
 			3
 		} else {
-			retries.as_ref().map(|r| r.attempts.get() + 1).unwrap_or(1)
+			retries.as_ref().map(|r| r.attempts.get() + 1).unwrap_or(2)
 		};
 		let retry_backoff = retries
 			.as_ref()
@@ -1292,15 +1293,14 @@ impl HTTPProxy {
 				state.evict();
 			}
 			let retryable = !last
-				&& if substrate_default_retry {
-					stale_assignment
-				} else {
-					should_retry(
-						&res,
-						retries.as_ref().unwrap(),
-						log.request_snapshot.as_deref(),
-					)
-				};
+				&& (is_unprocessed(&res)
+					|| if substrate_default_retry {
+						stale_assignment
+					} else if let Some(retries) = retries.as_ref() {
+						should_retry(&res, retries, log.request_snapshot.as_deref())
+					} else {
+						false
+					});
 			if !retryable {
 				if !last {
 					debug!("response not retry-able");
@@ -3884,6 +3884,16 @@ fn should_retry(
 	}
 }
 
+/// A request the upstream refused before processing it (a refused HTTP/2 stream, or one above a
+/// GOAWAY's last stream id) is safe to retry on a fresh connection, whatever its method.
+fn is_unprocessed(res: &Result<Response, SnapshottedProxyResponse>) -> bool {
+	matches!(
+		res,
+		Err(SnapshottedProxyResponse(ProxyResponse::Error(ProxyError::UpstreamCallFailed(e))))
+			if e.is_unprocessed()
+	)
+}
+
 fn is_stale_assignment(res: &Result<Response, SnapshottedProxyResponse>) -> bool {
 	match res {
 		Ok(response) => http::substrate::is_stale_assignment(response),
@@ -5601,5 +5611,137 @@ mod route_chain_tests {
 
 	fn listener_address() -> SocketAddr {
 		"127.0.0.1:80".parse().unwrap()
+	}
+}
+
+#[cfg(test)]
+mod unprocessed_retry_tests {
+	use std::net::SocketAddr;
+	use std::sync::{Arc, Mutex};
+
+	use ::http::{Method, StatusCode};
+	use agent_core::strng;
+	use http_body_util::BodyExt;
+	use hyper_util::client::legacy::Client;
+
+	use crate::http::Body;
+	use crate::test_helpers::proxymock::{self, MemoryConnector, TestBind};
+	use crate::types::agent::{
+		Backend, BackendTrafficPolicy, BackendWithPolicies, ResourceName, Target,
+	};
+
+	type Seen = Arc<Mutex<Vec<(usize, usize)>>>;
+
+	/// An h2c upstream that resets with `REFUSED_STREAM` the streams `refuse(connection, stream)`
+	/// picks and echoes the request body on the others. It records every stream it sees.
+	async fn refusing_h2_upstream(
+		refuse: impl Fn(usize, usize) -> bool + Send + Sync + 'static,
+	) -> (SocketAddr, Seen) {
+		let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+		let addr = listener.local_addr().unwrap();
+		let seen = Seen::default();
+		let refuse = Arc::new(refuse);
+		let seen_upstream = seen.clone();
+		tokio::spawn(async move {
+			let mut conn_id = 0;
+			while let Ok((socket, _)) = listener.accept().await {
+				let refuse = refuse.clone();
+				let seen = seen_upstream.clone();
+				tokio::spawn(async move {
+					let mut conn = h2::server::handshake(socket).await.unwrap();
+					let mut stream_id = 0;
+					while let Some(Ok((req, mut respond))) = conn.accept().await {
+						seen.lock().unwrap().push((conn_id, stream_id));
+						let refused = refuse(conn_id, stream_id);
+						stream_id += 1;
+						tokio::spawn(async move {
+							let mut body = req.into_body();
+							let mut data = Vec::new();
+							while let Some(chunk) = body.data().await {
+								let chunk = chunk.unwrap();
+								let _ = body.flow_control().release_capacity(chunk.len());
+								data.extend_from_slice(&chunk);
+							}
+							if refused {
+								respond.send_reset(h2::Reason::REFUSED_STREAM);
+								return;
+							}
+							let mut send = respond
+								.send_response(::http::Response::new(()), false)
+								.unwrap();
+							send.send_data(data.into(), true).unwrap();
+						});
+					}
+				});
+				conn_id += 1;
+			}
+		});
+		(addr, seen)
+	}
+
+	/// A gateway routing every request to `addr` over HTTP/2, without a retry policy.
+	fn h2_backend_gateway(addr: SocketAddr) -> (TestBind, Client<MemoryConnector, Body>) {
+		let backend = BackendWithPolicies {
+			backend: Backend::Opaque(
+				ResourceName::new(strng::format!("{addr}"), "".into()),
+				Target::Address(addr),
+			),
+			inline_policies: vec![BackendTrafficPolicy::HTTP(crate::types::backend::HTTP {
+				version: Some(::http::Version::HTTP_2),
+				..Default::default()
+			})],
+		};
+		let bind = proxymock::setup_proxy_test("{}")
+			.unwrap()
+			.with_raw_backend(backend)
+			.with_bind(proxymock::simple_bind())
+			.with_route(proxymock::basic_route(addr));
+		let io = bind.serve_http(proxymock::BIND_KEY);
+		(bind, io)
+	}
+
+	async fn body_string(res: crate::http::Response) -> String {
+		let body = res.into_body().collect().await.unwrap().to_bytes();
+		String::from_utf8(body.to_vec()).unwrap()
+	}
+
+	#[tokio::test]
+	async fn refused_stream_on_pooled_connection_is_retried_on_a_new_one() {
+		// The first connection serves one stream, then refuses every new one, like an upstream
+		// that is closing it.
+		let (addr, seen) = refusing_h2_upstream(|conn, stream| conn == 0 && stream > 0).await;
+		let (_bind, io) = h2_backend_gateway(addr);
+
+		let res = proxymock::send_request(io.clone(), Method::GET, "http://lo/").await;
+		assert_eq!(res.status(), StatusCode::OK);
+
+		let res = proxymock::send_request_body(
+			io,
+			Method::POST,
+			"http://lo/org/repo/git-upload-pack",
+			b"0032want",
+		)
+		.await;
+		assert_eq!(res.status(), StatusCode::OK);
+		assert_eq!(body_string(res).await, "0032want");
+		assert_eq!(*seen.lock().unwrap(), vec![(0, 0), (0, 1), (1, 0)]);
+	}
+
+	#[tokio::test]
+	async fn refused_stream_retry_is_bounded() {
+		let (addr, seen) = refusing_h2_upstream(|_, _| true).await;
+		let (_bind, io) = h2_backend_gateway(addr);
+
+		let res = proxymock::send_request_body(
+			io,
+			Method::POST,
+			"http://lo/org/repo/git-upload-pack",
+			b"0032want",
+		)
+		.await;
+		assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
+		let body = body_string(res).await;
+		assert!(body.contains("refused stream"), "{body}");
+		assert_eq!(*seen.lock().unwrap(), vec![(0, 0), (1, 0)]);
 	}
 }
