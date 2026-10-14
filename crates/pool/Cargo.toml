@@ -10,6 +10,7 @@ publish = { workspace = true }
 futures-channel.workspace = true
 futures-core.workspace = true
 futures-util.workspace = true
+h2.workspace = true
 http.workspace = true
 hyper.workspace = true
 pin-project-lite.workspace = true
