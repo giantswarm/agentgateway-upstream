@@ -1,7 +1,7 @@
 # A remote JWKS is refetched on an unknown key id, local configuration
 
 - **Status:** carried
-- **Upstream:** [agentgateway#3037](https://github.com/agentgateway/agentgateway/pull/3037) (a third party's pull request, open on 2026-10-13 with no activity since 2026-08-15) for [agentgateway#2798](https://github.com/agentgateway/agentgateway/issues/2798); falls away at the re-pin onto the first upstream commit containing it (#37742 row 143)
+- **Upstream:** [agentgateway#3037](https://github.com/agentgateway/agentgateway/pull/3037) (a third party's pull request, open on 2026-10-13 with no activity since 2026-08-15) for [agentgateway#2798](https://github.com/agentgateway/agentgateway/issues/2798); falls away at the re-pin onto the first upstream commit containing it
 - **Our commit:** the `fix: refetch remote JWKS on unknown key id before rejecting` commit, cherry-picked with its author's sign-off from agentgateway#3037
 
 ## Change
