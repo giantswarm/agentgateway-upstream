@@ -1,7 +1,7 @@
 # A request the upstream refused unprocessed is retried on a fresh connection
 
 - **Status:** carried
-- **Upstream:** prepared for upstream as branch `upstream/retry-unprocessed-h2-stream` (`d1ca056a6`, on the mirror `main` @ `f112c57e`), not opened; upstream `main` has no retry of a refused HTTP/2 stream (searched 2026-10-14: "refused", "goaway", "unprocessed"). Drops at the re-pin onto a commit containing it (#38476 row 201)
+- **Upstream:** to file — prepared in the fork: branch `upstream/retry-unprocessed-h2-stream` (`d1ca056a6`, on the mirror `main` @ `f112c57e`); upstream `main` has no retry of a refused HTTP/2 stream (searched 2026-10-14: "refused", "goaway", "unprocessed"). Drops at the re-pin onto a commit containing it
 - **Our commit:** the `fix(proxy): retry a request the upstream refused before processing it` commit
 
 ## Change
