@@ -11,3 +11,5 @@ Fork infrastructure: this file, the README pointer, `CODEOWNERS`, `.circleci/con
 ## Reason
 
 the line's CI, publishing and sync
+
+Throwaway proof line: see https://github.com/giantswarm/giantswarm/issues/1, giantswarm/github#1 and review-list row 208.
