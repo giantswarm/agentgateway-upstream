@@ -1,7 +1,7 @@
 # google.golang.org/grpc is pinned at v1.83.2
 
 - **Status:** carried
-- **Upstream:** not for upstream as such: falls away at the re-pin onto the first upstream commit that requires a grpc release with the fix (upstream bumps grpc through its dependency automation; a grpc release of the 1.84 line or v1.85.0 closes it). Upstream ignores the advisory in `osv-scanner.toml` (agentgateway#3658, in the pin); that file steers osv-scanner only and `govulncheck` reads no exclusion list, so the exclusion cannot replace the pin while golang/vulndb#6580 stays open; giantswarm/giantswarm#37742 row 92
+- **Upstream:** not for upstream as such: falls away at the re-pin onto the first upstream commit that requires a grpc release with the fix (upstream bumps grpc through its dependency automation; a grpc release of the 1.84 line or v1.85.0 closes it). Upstream ignores the advisory in `osv-scanner.toml` (agentgateway#3658, in the pin); that file steers osv-scanner only and `govulncheck` reads no exclusion list, so the exclusion cannot replace the pin while golang/vulndb#6580 stays open
 - **Our commit:** `ba219016` (the 2026-09-24 re-pin's own commit, replayed clean at the 2026-10-05 re-pin: v1.6.0 still requires v1.84.0, and the controller builds and its translator tests pass on v1.83.2)
 
 ## Change

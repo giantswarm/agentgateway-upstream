@@ -4,8 +4,8 @@ name: Branch
 # branch `giantswarm` and its pull requests, on GitHub-hosted runners (the org
 # has no Blacksmith runners), Linux lanes only (the platform runs Linux), the
 # build caches rolled forward by pushes to `giantswarm`, plus govulncheck for
-# the controller's Go module graph and one aggregate `ci-ok` status for the
-# ruleset. See FORK.md.
+# the controller's Go module graph, the ledger's public-links check and one
+# aggregate `ci-ok` status for the ruleset. See FORK.md.
 
 on:
   push:
@@ -332,6 +332,29 @@ jobs:
         go install golang.org/x/vuln/cmd/govulncheck@latest
         govulncheck ./...
 
+  # The ledger cites public repositories only: this repository is public
+  # (FORK.md, Contributing). A pull request is checked on the lines it adds,
+  # a push on the whole ledger.
+  public-links:
+    runs-on: ubuntu-24.04
+    steps:
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      with:
+        persist-credentials: false
+        # HEAD^1 of a pull request's merge is the line.
+        fetch-depth: 2
+    - name: Fixture runs of the check
+      run: .github/scripts/fork-public-links-test.sh
+    - name: The ledger cites public repositories only
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        if [[ "${GITHUB_EVENT_NAME}" == pull_request ]]; then
+          git diff --unified=0 HEAD^1 HEAD -- FORK.md fork | sed -n '/^+++ /d; s/^+//p'
+        else
+          git ls-files -z FORK.md fork | xargs -0 cat
+        fi | .github/scripts/fork-public-links.sh
+
   # The one status the `protect-giantswarm` ruleset requires.
   ci-ok:
     if: always()
@@ -345,6 +368,7 @@ jobs:
       - controller-conformance
       - controller-gie-conformance
       - govulncheck
+      - public-links
     runs-on: ubuntu-24.04
     steps:
     - name: Every job succeeded

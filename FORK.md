@@ -8,11 +8,9 @@ deploys) and inside Agent Substrate (`atenet-router` and `atenet-egress` of the
 they run is pinned, built, scanned and published. It answers one question from one place: **which agentgateway are
 we running, and why does it differ from upstream?**
 
-Tracking: the fork's own issues are filed in this repository's tracker; the cross-repo tracking is the line [giantswarm/giantswarm#37758](https://github.com/giantswarm/giantswarm/issues/37758),
-upstream engagement [giantswarm/giantswarm#37742](https://github.com/giantswarm/giantswarm/issues/37742), the sibling
-lines built the same way — kagent [giantswarm/giantswarm#37010](https://github.com/giantswarm/giantswarm/issues/37010)
-(`giantswarm/kagent-upstream`) and Substrate [giantswarm/giantswarm#37757](https://github.com/giantswarm/giantswarm/issues/37757)
-(`giantswarm/substrate`) — and the epic [giantswarm/giantswarm#37705](https://github.com/giantswarm/giantswarm/issues/37705).
+Tracking: the fork's own issues are filed in this repository's tracker; the sibling lines built the same way are
+kagent ([giantswarm/kagent-upstream](https://github.com/giantswarm/kagent-upstream)) and Substrate
+([giantswarm/substrate](https://github.com/giantswarm/substrate)).
 
 ## Branches
 
@@ -96,9 +94,9 @@ resume refusal answered at once, whose directive only Substrate 1.3 still sends 
 
 Dropped at the 2026-10-05 re-pin because the pin contains their fixes: the `GRPCRoute` method-match translation (`223b80e2`, pull request #6;
 agentgateway#3723 `2353a2c1`, merged 2026-10-01, closes our agentgateway#3715 and makes a service-only match
-a `PathPrefix` and a `RegularExpression` match one path regex; #37742 row 25) and the e2e warm step's absolute `-toolexec` path (`a2a16cea`,
+a `PathPrefix` and a `RegularExpression` match one path regex) and the e2e warm step's absolute `-toolexec` path (`a2a16cea`,
 pull request #21; agentgateway#3704 `f6ceca24`, merged 2026-09-30, resolves the helper from the repository root
-the same way, so branch `upstream/ci-toolexec-absolute` is obsolete; #37742 row 55). Both conflicted at the rebase and were skipped.
+the same way, so branch `upstream/ci-toolexec-absolute` is obsolete). Both conflicted at the rebase and were skipped.
 The pin also brought agentgateway#3686 (`5bc6301f`, egress certificate rotation on long-lived tunnels and traced egress gRPC calls),
 which sits next to #20/#23 without replacing them, and #3689 (`c4143926`, protocol selection from the Substrate policy), on which #35 and
 #39 were re-seated.
@@ -141,7 +139,7 @@ itself (`git rebase` drops already-applied patches), and its file in `fork/` is 
    `giantswarm` whose head has not passed `ci-ok`, for every actor, so nobody updates the line by hand.
 4. Update this file (the pin) and the ledger files in `fork/` (a dropped patch is marked `dropped` or deleted) and the upstream-pin annotation in `.circleci/config.yml`
    (`index:io.giantswarm.upstream.version=<pin>`, stamped on every published index) in a pull request, and the
-   agentgateway rows of #37742.
+   `Upstream` field of every ledger file the new pin changes.
 5. Tag a release (`vX.Y.Z` — a re-pin is at least a minor bump, see "Publishing"), move the consumers to it (see
    "Consumers"), prove it in agentlab — for a move the
    Substrate line depends on, the release is cut once `ci-ok` is green on the exact head (the Substrate chart's
@@ -215,7 +213,7 @@ replayed from>`, then run the land step.
 mirror for releases — on every push to `giantswarm` (a dev build) and on every release tag (`vX.Y.Z`, or `vX.Y.Z-rc.N`
 for a release candidate); the tags themselves are cut by the org's `zz_generated.auto_release.yaml` workflow (an `-rc.N` tag and its GitHub Release on every push to `giantswarm`, computed by git-cliff from the conventional commits since the last reachable tag; a stable tag through its `workflow_dispatch`) or by hand for a re-pin, whose rewritten history hides the last rc tag from the workflow (on 2026-10-05 it failed with `Release.tag_name already exists` until `v2.3.0` existed); no image is published from GitHub Actions or by hand, and nothing pushes to ghcr.io (the
 line published there from a fork workflow until 2026-09-19; that publication was a mistake and its retagger copies
-into gsoci are retired, [giantswarm/giantswarm#37874](https://github.com/giantswarm/giantswarm/issues/37874)). The
+into gsoci are retired). The
 pipeline is the architect orb's stock jobs (`giantswarm/architect@10.10.0`; 10.6.0 was the first release with `build-args`) and
 nothing else: `build-image` builds one platform natively on a machine of that architecture and pushes it by digest,
 `push-to-registries` computes the version (`gitsemver`), builds or merges, tags, signs and attests (SLSA provenance,
@@ -278,7 +276,7 @@ releases (Istio ≤ 1.13) and flags code that is years past them; they are time-
 (re-triage: an `istio.io/istio` release tag in `go.mod`, or Trivy learning pseudo-versions). The controller's Go module
 graph is covered by `govulncheck` on every push and pull request. Trivy does not see into a Rust binary that was not built with
 `cargo auditable`; upstream's `deny.toml` (`cargo deny check advisories`) is the tool for the Rust dependency graph
-and is not wired into CI yet — a known gap of the line, tracked in #37758.
+and is not wired into CI yet — a known gap of the line.
 
 **Builds are cold.** The Rust build runs inside the Dockerfile with BuildKit cache mounts that a fresh remote-Docker VM
 does not persist, so every publish rebuilds from scratch (the build jobs run on `xlarge` / `arm.xlarge`). Good enough
@@ -298,16 +296,21 @@ for a line that rebuilds on re-pins and patches; a persisted cargo cache is an i
 - **Upstream first, prepared here.** Every behavioural change is prepared for upstream
   ([agentgateway/agentgateway](https://github.com/agentgateway/agentgateway); see upstream's `CONTRIBUTION.md`) as one
   upstream-ready commit, DCO-signed (`git commit -s`), with no fork references. The commit goes onto the fork with its
-  ledger row in `fork/`, and is pushed as an `upstream/<slug>` branch on this repository. It is queued as a row on
-  [giantswarm/giantswarm#37742](https://github.com/giantswarm/giantswarm/issues/37742). A human decides what goes upstream and opens it; an agent never opens, comments
+  ledger row in `fork/`, and is pushed as an `upstream/<slug>` branch on this repository. Its ledger row reads "to file —
+  prepared in the fork: branch `upstream/<slug>`" until it is opened, and links the upstream pull request from then on.
+  A human reviews the prepared branches in batches, decides what goes upstream and opens it; an agent never opens, comments
   on, reviews or closes a pull request or issue on the upstream repository. The line carries the same change as a
   `git cherry-pick -x` of the upstream-ready commit until an upstream release contains it, with its row.
+- **Public only.** This repository is public: a ledger row, a commit message and this file cite public issues and pull
+  requests only, and where the reasoning lives in a private tracker it is written out in a sentence instead. The
+  `public-links` job of the Branch workflow, under `ci-ok`, fails a pull request whose added ledger lines cite a giantswarm
+  repository that is not public, or a row of a private list (`.github/scripts/fork-public-links.sh`).
 - **Fork-only changes** (workflows, this file): a pull request from `fork/<topic>` against `giantswarm`; squash-merge.
   Cherry-picks of upstream commits are rebase-merged so they keep their patch-id and fall away at the re-pin.
 - **Experiments**: your own personal fork. Branches here exist to become pull requests.
 - **What CI runs on a pull request**: upstream's `Branch` workflow — proxy tests (Linux, with the Keycloak/JWKS
   validation dependencies), proxy lint (schema generation, clippy), UI lint and Playwright, controller tests and
-  lint, controller e2e and both conformance suites on kind — plus `govulncheck`; `ci-ok` is required. The CircleCI pipeline publishes only from `giantswarm` and release tags; on a pull-request branch it runs the `validate` workflow — the same image builds with `push: false`, about as long as the Rust lanes. Expect an hour: the Rust lanes build on 4-vCPU hosted runners with caches that
+  lint, controller e2e and both conformance suites on kind — plus `govulncheck` and `public-links`; `ci-ok` is required. The CircleCI pipeline publishes only from `giantswarm` and release tags; on a pull-request branch it runs the `validate` workflow — the same image builds with `push: false`, about as long as the Rust lanes. Expect an hour: the Rust lanes build on 4-vCPU hosted runners with caches that
   only pushes to `giantswarm` roll forward.
 - Upstream's `release.yml` and `nightly.yml` cannot be dispatched here (their `workflow_dispatch` triggers are
   removed on this branch; they would push under upstream's names to ghcr.io). Do not push tags other than the line's releases (`vX.Y.Z`, `vX.Y.Z-rc.N`; see "Publishing").
