@@ -1333,6 +1333,12 @@ impl Error {
 		matches!(self.kind, ErrorKind::ConnectTimeout)
 	}
 
+	/// Returns true if the connection to the upstream could not be established (a connect error or
+	/// its timeout): the request never reached the upstream.
+	pub fn is_connect(&self) -> bool {
+		matches!(self.kind, ErrorKind::Connect | ErrorKind::ConnectTimeout)
+	}
+
 	/// Returns true if the upstream never processed the request: its HTTP/2 stream was reset with
 	/// `REFUSED_STREAM`, or it was above the last stream id of the peer's `GOAWAY`. Such a request
 	/// is safe to retry on another connection, whatever its method (RFC 9113, section 8.7).
