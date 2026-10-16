@@ -114,7 +114,9 @@ impl ProxyError {
 			)
 			| ProxyError::SubstrateEgressFailed(_)
 			| ProxyError::UpstreamTCPProxy(_) => ProxyResponseReason::UpstreamFailure,
-			ProxyError::RequestTimeout | ProxyError::UpstreamCallTimeout => ProxyResponseReason::Timeout,
+			ProxyError::RequestTimeout
+			| ProxyError::UpstreamCallTimeout
+			| ProxyError::UpstreamConnectTimeout => ProxyResponseReason::Timeout,
 			ProxyError::ExtProc(_) => ProxyResponseReason::ExtProc,
 			ProxyError::RateLimitFailed
 			| ProxyError::RateLimitExceeded { .. }
@@ -290,6 +292,10 @@ pub enum ProxyError {
 	UpstreamCallFailed(HyperError),
 	#[error("upstream call timeout")]
 	UpstreamCallTimeout,
+	/// The connection to the upstream was not established in time; answered like
+	/// `UpstreamCallTimeout`, but the request never reached the upstream.
+	#[error("upstream call timeout")]
+	UpstreamConnectTimeout,
 	#[error("upstream tcp call failed: {0}")]
 	UpstreamTCPCallFailed(http::Error),
 	#[error("upstream tcp proxy failed: {0}")]
@@ -440,7 +446,7 @@ impl ProxyError {
 	pub fn is_retryable(&self) -> bool {
 		match self {
 			ProxyError::UpstreamCallFailed(_) => true,
-			ProxyError::UpstreamCallTimeout => true,
+			ProxyError::UpstreamCallTimeout | ProxyError::UpstreamConnectTimeout => true,
 			ProxyError::DnsResolution => true,
 			_ => false,
 		}
@@ -498,7 +504,9 @@ impl ProxyError {
 			ProxyError::BackendAuthenticationFailed(_) => "backend authentication failed",
 			ProxyError::Body(_) => "request body error",
 			ProxyError::UpstreamCallFailed(e) => external_upstream_message(e),
-			ProxyError::UpstreamCallTimeout | ProxyError::RequestTimeout => "request timeout",
+			ProxyError::UpstreamCallTimeout
+			| ProxyError::UpstreamConnectTimeout
+			| ProxyError::RequestTimeout => "request timeout",
 			ProxyError::UpstreamTCPCallFailed(e) => external_upstream_message(e),
 			ProxyError::UpstreamTCPProxy(_) => "upstream connection failed",
 			ProxyError::Http(_) => "invalid http",
@@ -582,7 +590,9 @@ impl ProxyError {
 			ProxyError::DynamicBackendLoopback => StatusCode::SERVICE_UNAVAILABLE,
 			ProxyError::NoHealthyEndpoints => StatusCode::SERVICE_UNAVAILABLE,
 			ProxyError::UpstreamCallFailed(_) => StatusCode::SERVICE_UNAVAILABLE,
-			ProxyError::UpstreamCallTimeout => StatusCode::GATEWAY_TIMEOUT,
+			ProxyError::UpstreamCallTimeout | ProxyError::UpstreamConnectTimeout => {
+				StatusCode::GATEWAY_TIMEOUT
+			},
 
 			ProxyError::RequestTimeout => StatusCode::GATEWAY_TIMEOUT,
 			ProxyError::Processing(_) => StatusCode::SERVICE_UNAVAILABLE,
