@@ -337,6 +337,11 @@ impl EndpointSet<Endpoint> {
 
 	/// Explicit destination bypasses bucketing and health — search every endpoint
 	/// (active + rejected) so an evicted-but-explicitly-targeted backend is still reachable.
+	/// Returns true while `o` is an endpoint of this set, the override `select_endpoint` honors.
+	pub fn has_override(&self, workloads: &store::WorkloadStore, o: SocketAddr) -> bool {
+		self.select_override(workloads, o).is_some()
+	}
+
 	fn select_override(&self, workloads: &store::WorkloadStore, o: SocketAddr) -> Option<Candidate> {
 		self.find_endpoint(|ep, info| {
 			if !contains_target_port(ep, o.port()) {
