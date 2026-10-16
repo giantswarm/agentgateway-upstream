@@ -1121,6 +1121,12 @@ impl Error {
 		matches!(self.kind, ErrorKind::ConnectTimeout)
 	}
 
+	/// Returns true if the connection to the upstream could not be established (a connect error or
+	/// its timeout): the request never reached the upstream.
+	pub fn is_connect(&self) -> bool {
+		matches!(self.kind, ErrorKind::Connect | ErrorKind::ConnectTimeout)
+	}
+
 	/// Returns the info of the client connection on which this error occurred.
 	pub fn connect_info(&self) -> Option<&Connected> {
 		self.connect_info.as_ref()
