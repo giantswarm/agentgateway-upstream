@@ -161,7 +161,7 @@ pub fn setup_llm_named_provider_mock(
 	provider: LocalNamedAIProvider,
 	config: &str,
 ) -> (MockServer, TestBind, Client<MemoryConnector, Body>) {
-	let config = crate::config::parse_config(config.to_string(), None).unwrap();
+	let config = parse_test_config(config).unwrap();
 	setup_llm_named_provider_mock_with_config(mock, provider, config)
 }
 
@@ -1464,8 +1464,17 @@ impl TestBind {
 
 pub fn setup_proxy_test(cfg: &str) -> anyhow::Result<TestBind> {
 	agent_core::telemetry::testing::setup_test_logging();
-	let config = crate::config::parse_config(cfg.to_string(), None)?;
+	let config = parse_test_config(cfg)?;
 	Ok(setup_proxy_test_with_config(config))
+}
+
+/// Parses `cfg` while holding the env lock, so the config never reads a process environment that a
+/// concurrent test has only partly set (e.g. `XDS_ADDRESS` without `NAMESPACE`). The callers must not
+/// already hold the lock. `block_on` because `blocking_lock` panics inside an async test's runtime.
+fn parse_test_config(cfg: &str) -> anyhow::Result<crate::Config> {
+	#[cfg(test)]
+	let _env = futures::executor::block_on(crate::config::lock_env_for_tests_async());
+	crate::config::parse_config(cfg.to_string(), None)
 }
 
 pub fn setup_proxy_test_with_config(config: crate::Config) -> TestBind {
