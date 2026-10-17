@@ -1422,6 +1422,70 @@ mod tests {
 	}
 
 	#[test]
+	fn replace_headers_ignore_a_prefix_a_path_could_escape() {
+		let codex = protos::ateapi::CredentialHeader {
+			header: "authorization".to_owned(),
+			prefix: "Bearer ".to_owned(),
+			credential_uri: "ate-secret://p/codex".to_owned(),
+			path_prefix: "/backend-api/codex/".to_owned(),
+			..Default::default()
+		};
+		let host = protos::ateapi::CredentialHeader {
+			header: "authorization".to_owned(),
+			prefix: "Basic ".to_owned(),
+			credential_uri: "ate-secret://p/host".to_owned(),
+			..Default::default()
+		};
+		let scoped = [codex.clone()];
+		let with_host = [codex, host];
+		// The egress passes the request path without its query.
+		let path = |target: &'static str| target.split('?').next().unwrap_or_default();
+
+		// The prefix itself still applies under it.
+		let chosen = replace_headers_for(&with_host, path("/backend-api/codex/responses?stream=1"));
+		assert_eq!(chosen.len(), 1);
+		assert_eq!(chosen[0].credential_uri, "ate-secret://p/codex");
+
+		for target in [
+			"/backend-api/codex/../../other",
+			"/backend-api/codex/..",
+			"/backend-api/codex/./../other",
+			"/backend-api/codex/%2e%2e/%2e%2e/other",
+			"/backend-api/codex/%2E%2E/%2E%2E/other",
+			"/backend-api/codex/%2e%2E/other",
+			"/backend-api/codex/.%2e/other",
+			"/backend-api/codex/%2e./other",
+			"/backend-api/codex/..%2fother",
+			"/backend-api/codex/..%2Fother",
+			"/backend-api/codex/%2fother",
+			"/backend-api/codex%2f..%2f..%2fother",
+			"/backend-api/codex//../../other",
+			"/backend-api/codex//other",
+			"/backend-api/codex/..;/..;/other",
+			"/backend-api/codex/..;x=1/other",
+			r"/backend-api/codex/..\..\other",
+			"/backend-api/codex/..%5c..%5cother",
+			"/backend-api/codex/..%5C..%5Cother",
+			"/backend-api/codex/../../other?q=/backend-api/codex/",
+		] {
+			assert!(
+				replace_headers_for(&scoped, path(target)).is_empty(),
+				"replace_headers_for(scoped, {target:?}) applies the scoped entry"
+			);
+			let chosen = replace_headers_for(&with_host, path(target));
+			assert_eq!(
+				chosen.len(),
+				1,
+				"replace_headers_for(with_host, {target:?})"
+			);
+			assert_eq!(
+				chosen[0].credential_uri, "ate-secret://p/host",
+				"replace_headers_for(with_host, {target:?})"
+			);
+		}
+	}
+
+	#[test]
 	fn malformed_credential_secrets_fail_closed() {
 		let injection = protos::ateapi::CredentialHeader {
 			header: "authorization".to_owned(),
