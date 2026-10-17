@@ -10,4 +10,4 @@ A stateful MCP session through a Service backend stays pinned to the endpoint of
 
 ## Reason
 
-After the eviction of the upstream pod, every request of an already-initialized client answered 500 `Connect: deadline has elapsed` after about 10 s, until the client initialized a new session: the session kept dialing the IP of the pod that was gone ([giantswarm/agentgateway-upstream#90](https://github.com/giantswarm/agentgateway-upstream/issues/90))
+A stateful MCP session through a Service-backed target stayed pinned to the pod IP of its first response: once that pod was replaced, every request of the session failed (`500` "no healthy backends", or a connect error after the dial timeout while the old endpoint was still listed) until the client initialized a new session ([giantswarm/agentgateway-upstream#90](https://github.com/giantswarm/agentgateway-upstream/issues/90)). A `static.host` target is an opaque backend and is never pinned
