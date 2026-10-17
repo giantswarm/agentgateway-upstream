@@ -743,7 +743,15 @@ fn should_sign_header(name: &str) -> bool {
 static SDK_CONFIG: OnceCell<SdkConfig> = OnceCell::const_new();
 async fn sdk_config<'a>() -> &'a SdkConfig {
 	SDK_CONFIG
-		.get_or_init(|| async { aws_config::load_defaults(BehaviorVersion::v2026_01_12()).await })
+		.get_or_init(|| async {
+			let loader = aws_config::defaults(BehaviorVersion::v2026_01_12());
+			// The config is cached for the whole process, and unit tests run in parallel: in tests it
+			// must not pick up the host's ambient region (AWS_REGION, ~/.aws/config, IMDS), or whichever
+			// test loads it first decides the region every other test sees.
+			#[cfg(test)]
+			let loader = loader.region(None::<Region>);
+			loader.load().await
+		})
 		.await
 }
 
