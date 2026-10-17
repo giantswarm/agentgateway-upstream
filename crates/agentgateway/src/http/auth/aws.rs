@@ -746,10 +746,13 @@ static SDK_CONFIG: OnceCell<SdkConfig> = OnceCell::const_new();
 async fn sdk_config<'a>(client: &client::Client) -> &'a SdkConfig {
 	SDK_CONFIG
 		.get_or_init(|| async {
-			aws_config::defaults(BehaviorVersion::v2026_01_12())
-				.http_client(client.clone())
-				.load()
-				.await
+			let loader = aws_config::defaults(BehaviorVersion::v2026_01_12()).http_client(client.clone());
+			// The config is cached for the whole process, and unit tests run in parallel: in tests it
+			// must not pick up the host's ambient region (AWS_REGION, ~/.aws/config, IMDS), or whichever
+			// test loads it first decides the region every other test sees.
+			#[cfg(test)]
+			let loader = loader.region(None::<Region>);
+			loader.load().await
 		})
 		.await
 }
