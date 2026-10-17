@@ -648,12 +648,9 @@ async fn test_aws_sign_requestallback() {
 
 #[tokio::test(start_paused = true)]
 async fn test_aws_sign_request_no_region_error() {
-	unsafe {
-		// prevent loading from default profile on developer's laptops, so this test passes consistently.
-		std::env::set_var("AWS_PROFILE", "/dev/null");
-	}
-
-	// Test AWS signing fails with clear error when no region available
+	// Test AWS signing fails with clear error when no region available.
+	// The ambient SDK config ignores the host's region in tests (see `aws::sdk_config`), so this
+	// holds on machines with a default region and regardless of which test loads the config first.
 	let mut req = crate::http::Request::new(crate::http::Body::empty());
 	*req.uri_mut() = "https://bedrock-runtime.amazonaws.com/model/invoke"
 		.parse()
