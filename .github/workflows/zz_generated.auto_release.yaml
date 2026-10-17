@@ -2,7 +2,7 @@
 #
 #    devctl
 #
-#    https://github.com/giantswarm/devctl/blob/cfe6dff39c7c5282fb88c810e8db6f96fd8aba9a/pkg/gen/input/workflows/internal/file/auto_release.yaml.template
+#    https://github.com/giantswarm/devctl/blob/48d8219323be4cd05f2eccad7ccfc71118b3ae82/pkg/gen/input/workflows/internal/file/auto_release.yaml.template
 #
 # yamllint disable rule:truthy
 # Push-based release tagger + release-page publisher.
@@ -49,13 +49,7 @@ on:
         options: [auto, stable]
         default: auto
 
-permissions:
-  contents: write       # push tags and create the GitHub Release
-  # git-cliff's GitHub API lookups (commit.remote.pr_number / username
-  # in release notes) need PR read access via GITHUB_TOKEN.
-  pull-requests: read
-  # The stable run reads the commit statuses of the candidate it promotes.
-  statuses: read
+permissions: {}
 
 # Scope the concurrency lock per branch so a backport tag on release-2.x
 # doesn't block (or get blocked by) a main release, and vice versa. A second
@@ -68,6 +62,13 @@ jobs:
   tag:
     name: Tag
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write       # push tags and create the GitHub Release
+      # git-cliff's GitHub API lookups (commit.remote.pr_number / username
+      # in release notes) need PR read access via GITHUB_TOKEN.
+      pull-requests: read
+      # The stable run reads the commit statuses of the candidate it promotes.
+      statuses: read
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
@@ -154,7 +155,9 @@ jobs:
           # pre-release is created with the tag, and the pipelines that build
           # and publish it report on its commit: a failed or still running one
           # refuses the promotion. A commit no pipeline reports on has nothing
-          # to wait for.
+          # to wait for. A failed CircleCI job the release does not require
+          # (advisory_jobs, the rule `devctl release wait` and `devctl release
+          # promote` apply) is a warning, not a refusal.
           if ! prerelease=$(gh release view "$rc" --json isPrerelease --jq .isPrerelease 2>/dev/null); then
             echo "::error title=Candidate not released::${rc} has no GitHub release; the run that cut it did not finish. Cut a new candidate."
             exit 1
@@ -165,13 +168,14 @@ jobs:
           fi
           # The API now and then answers with an empty or truncated body or a
           # 5xx: the read is retried with backoff, and only a failure on every
-          # try refuses the promotion.
+          # try refuses the promotion. The answer's first line is the number
+          # of contexts, every further one a context's latest
+          # "<state> <context>".
           request="repos/${GH_REPO}/commits/${rc}/status"
           tries=4
           for try in $(seq 1 "$tries"); do
-            if status=$(gh api "$request" --jq '"\(.state) \(.total_count)"') \
-              && read -r state count <<<"$status" \
-              && [ -n "$state" ] && [[ "$count" =~ ^[0-9]+$ ]]; then
+            if statuses=$(gh api -X GET "$request" -F per_page=100 --jq '.total_count, (.statuses[] | "\(.state) \(.context)")') \
+              && count=$(head -n 1 <<<"$statuses") && [[ "$count" =~ ^[0-9]+$ ]]; then
               break
             fi
             if [ "$try" = "$tries" ]; then
@@ -181,10 +185,35 @@ jobs:
             echo "GET ${request} failed (try ${try} of ${tries}), retrying in $((2 ** try))s"
             sleep $((2 ** try))
           done
-          if [ "$count" != 0 ] && [ "$state" != success ]; then
-            echo "::error title=Candidate not built::the commit statuses of ${rc} are ${state}: https://github.com/${GH_REPO}/commit/$(git rev-parse "${rc}^{commit}"). Promote it once its pipelines passed."
+          advisory_jobs=" sync-china-registry "
+          failed=() running=() advisory=()
+          while read -r state context; do
+            case "$state" in
+              success) ;;
+              failure | error)
+                if [[ "$context" == "ci/circleci: "* && "$advisory_jobs" == *" ${context#ci/circleci: } "* ]]; then
+                  advisory+=("$context")
+                else
+                  failed+=("${context} (${state})")
+                fi
+                ;;
+              *) running+=("$context") ;;
+            esac
+          done < <(tail -n +2 <<<"$statuses")
+          commit="https://github.com/${GH_REPO}/commit/$(git rev-parse "${rc}^{commit}")"
+          if [ "${#failed[@]}" != 0 ]; then
+            printf -v list '%s, ' "${failed[@]}"
+            echo "::error title=Candidate not built::the commit statuses of ${rc} are failure: ${list%, } on ${commit}. Promote it once its pipelines passed."
             exit 1
           fi
+          if [ "${#running[@]}" != 0 ]; then
+            printf -v list '%s, ' "${running[@]}"
+            echo "::error title=Candidate not built::the commit statuses of ${rc} are pending: ${list%, } on ${commit}. Promote it once its pipelines passed."
+            exit 1
+          fi
+          for context in "${advisory[@]}"; do
+            echo "::warning title=Advisory status failed::the commit status ${context} of ${rc} failed; the release does not require it, so the candidate is judged without it."
+          done
 
           after=$(git log --format='%h %s' "${rc}..HEAD")
           git checkout -q --detach "$rc"
@@ -353,6 +382,41 @@ jobs:
           echo "prerelease=${is_rc}" >> "$GITHUB_OUTPUT"
           echo "target=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
+      # One commit releases one version: the release tags of two versions on
+      # one commit give two answers to "which version is this", and every
+      # reader (a release wait, a rollout, a person) picks its own. A
+      # candidate and its promoted stable share a commit by design, and an
+      # upstream pre-release outside the release pattern names no release of
+      # this repository. The tags are read from the remote, not from this
+      # checkout: the fork baseline step may move one here, and a run on
+      # another branch may have tagged the commit since the checkout.
+      - name: Refuse another version's tag on the commit
+        id: one-version
+        if: steps.decide.outputs.tag != ''
+        env:
+          TAG: ${{ steps.decide.outputs.tag }}
+          TARGET: ${{ steps.decide.outputs.target }}
+        run: |
+          set -euo pipefail
+          release='^v?([0-9]+\.[0-9]+\.[0-9]+)(-rc\.[0-9]+)?$'
+          [[ "$TAG" =~ $release ]]
+          version=${BASH_REMATCH[1]}
+          # An annotated tag is listed twice, its peeled commit under ^{}:
+          # only that line matches the commit.
+          conflicts=()
+          while read -r sha ref; do
+            tag=${ref#refs/tags/}
+            tag=${tag%'^{}'}
+            if [ "$sha" = "$TARGET" ] && [[ "$tag" =~ $release ]] && [ "${BASH_REMATCH[1]}" != "$version" ]; then
+              conflicts+=("$tag")
+            fi
+          done < <(git ls-remote --tags origin)
+          if [ "${#conflicts[@]}" -gt 0 ]; then
+            echo "::error title=Another version on the commit::${TAG} would land on ${TARGET:0:8}, which already carries the release tag of another version: ${conflicts[*]}. One commit releases one version: no tag and no release are cut. Merge a change to cut the next candidate on a commit of its own."
+            exit 1
+          fi
+          echo "${TARGET:0:8} carries no other version's release tag: ${TAG} is its only version"
+
       # A stable release can carry rules only the repository knows (a fork
       # line's pins, its release ledger). Checked in the tag's own pipeline
       # they come too late: the tag and the GitHub release exist by then, and
@@ -443,7 +507,7 @@ jobs:
             --title "$TAG" \
             --notes-file release-notes.md \
             --target "$TARGET" \
-            "${flags[@]}"
+            ${flags[@]+"${flags[@]}"}
 
       # A tag that never reaches CircleCI is a silent failure: the GitHub
       # Release above exists and looks finished, but nothing gets built or
@@ -490,7 +554,7 @@ jobs:
             url="$api"
             pages=0
             while [ -n "$url" ] && [ "$pages" -lt 2 ]; do
-              resp=$(curl -sS "${auth[@]}" -w '\n%{http_code}' "$url" || printf '\n000')
+              resp=$(curl -sS ${auth[@]+"${auth[@]}"} -w '\n%{http_code}' "$url" || printf '\n000')
               last_code=${resp##*$'\n'}
               body=${resp%$'\n'*}
               [ "$last_code" = "200" ] || break
@@ -524,7 +588,7 @@ jobs:
                 exit 1
               fi
               echo "CircleCI never built ${TAG}; triggering the pipeline through the API"
-              resp=$(curl -sS "${auth[@]}" -w '\n%{http_code}' -X POST -H 'Content-Type: application/json' -d "{\"tag\":\"${TAG}\"}" "$api" || printf '\n000')
+              resp=$(curl -sS ${auth[@]+"${auth[@]}"} -w '\n%{http_code}' -X POST -H 'Content-Type: application/json' -d "{\"tag\":\"${TAG}\"}" "$api" || printf '\n000')
               code=${resp##*$'\n'}
               body=${resp%$'\n'*}
               if [ "$code" != "201" ]; then
