@@ -2426,6 +2426,71 @@ async fn substrate_egress_rejects_unrecognized_or_unauthorized_connections(#[cas
 	);
 }
 
+#[cfg(feature = "crypto-aws-lc")]
+#[rstest::rstest]
+#[case::listed(true)]
+#[case::unlisted_port(false)]
+#[tokio::test]
+async fn substrate_egress_relays_raw_tcp_a_tcp_rule_allows(#[case] listed: bool) {
+	// open_actor_egress_tunnel CONNECTs to 127.0.0.2, the address a tcp rule
+	// decides on and the gateway dials.
+	let raw_upstream = TcpListener::bind("127.0.0.2:0").await.unwrap();
+	let address = raw_upstream.local_addr().unwrap();
+	let port = address.port();
+	let rule = protos::ateapi::EgressRule {
+		tcp: Some(protos::ateapi::TcpRule {
+			cidrs: vec!["127.0.0.2/32".to_owned()],
+			ports: Some(protos::ateapi::Ports {
+				numbers: vec![if listed { i32::from(port) } else { 1 }],
+				..Default::default()
+			}),
+			..Default::default()
+		}),
+		..Default::default()
+	};
+	let policy = EgressPolicy {
+		rules: vec![rule],
+		..Default::default()
+	};
+	let (gateway, _api) = substrate_tls_gateway(Ok(policy), address, None).await;
+	let mut tcp_route = basic_named_tcp_route("/passthrough".into());
+	tcp_route.key = "tcp-route".into();
+	let gateway = gateway.with_tcp_route_for_listener(strng::literal!("tcp"), tcp_route);
+
+	let mut io = open_actor_egress_tunnel(&gateway, port).await;
+	// SSH: the client sends its identification string first.
+	io.write_all(b"SSH-2.0-actor\r\n").await.unwrap();
+	if listed {
+		let (mut upstream, _) = tokio::time::timeout(Duration::from_secs(3), raw_upstream.accept())
+			.await
+			.expect("allowed tcp did not dial the destination")
+			.unwrap();
+		let mut received = [0; 15];
+		upstream.read_exact(&mut received).await.unwrap();
+		assert_eq!(&received, b"SSH-2.0-actor\r\n");
+		upstream.write_all(b"SSH-2.0-server\r\n").await.unwrap();
+		let mut answer = [0; 16];
+		io.read_exact(&mut answer).await.unwrap();
+		assert_eq!(&answer, b"SSH-2.0-server\r\n");
+	} else {
+		let mut buf = [0; 1];
+		assert_eq!(
+			tokio::time::timeout(Duration::from_secs(3), io.read(&mut buf))
+				.await
+				.unwrap()
+				.unwrap(),
+			0,
+			"a denied tcp stream must close without bytes"
+		);
+		assert!(
+			tokio::time::timeout(Duration::from_millis(50), raw_upstream.accept())
+				.await
+				.is_err(),
+			"denied tcp dialed the destination"
+		);
+	}
+}
+
 /// Records the `traceparent` each Substrate gRPC call receives, tagged by method.
 #[derive(Clone)]
 struct Traceparents<H> {

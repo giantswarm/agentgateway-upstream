@@ -1,3 +1,4 @@
+use std::net::{IpAddr, SocketAddr};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
@@ -724,6 +725,121 @@ fn tls_mode(
 	})
 }
 
+/// The address an actor's CONNECT named, set only when it named an IP literal.
+/// A tcp rule decides on it alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct EgressConnectAddress(pub SocketAddr);
+
+/// Authorizes a stream that is neither TLS nor HTTP against the actor's tcp
+/// rules, on the address and port its CONNECT named, and pins the backend to
+/// that address. A hostname in a rule matches when the gateway resolves it to
+/// that address.
+pub(crate) async fn authorize_tcp(
+	client: &PolicyClient,
+	connection: &mut Extension,
+) -> Result<(), ProxyError> {
+	let identity = connection
+		.get::<ActorIdentity>()
+		.ok_or_else(|| ProxyError::SubstrateEgressDenied("missing actor identity".to_owned()))?;
+	let resolution = connection.get::<EgressActorResolution>().ok_or_else(|| {
+		ProxyError::SubstrateEgressDenied("missing actor egress control API".to_owned())
+	})?;
+	let Some(EgressConnectAddress(address)) = connection.get::<EgressConnectAddress>().copied()
+	else {
+		return Err(ProxyError::SubstrateEgressDenied(
+			"tcp egress needs a CONNECT to an IP address".to_owned(),
+		));
+	};
+	if !tcp_destination_routable(address.ip()) {
+		return Err(ProxyError::SubstrateEgressDenied(format!(
+			"tcp egress to {address} names no single host"
+		)));
+	}
+	let policy = fetch_policy(&resolution.target, client, identity).await?;
+	let upstream = &client.inputs.upstream;
+	if !tcp_rule_allows(&policy, address, |name| upstream.resolve_all(name.into())).await {
+		return Err(ProxyError::SubstrateEgressDenied(format!(
+			"actor egress policy denied tcp destination {address}"
+		)));
+	}
+	connection.insert(DynamicBackendOverride(Target::Address(address)));
+	Ok(())
+}
+
+/// Reports whether an address names a single host. Unspecified, multicast and
+/// broadcast addresses never do, whatever a rule names.
+fn tcp_destination_routable(ip: IpAddr) -> bool {
+	match ip.to_canonical() {
+		IpAddr::V4(ip) => !(ip.is_unspecified() || ip.is_multicast() || ip.is_broadcast()),
+		IpAddr::V6(ip) => !(ip.is_unspecified() || ip.is_multicast()),
+	}
+}
+
+/// The loopback or link-local range an address is in. Those addresses are
+/// the gateway's own or its node's (a cloud metadata service among them), so
+/// only a CIDR inside the range reaches them: a wider CIDR or a hostname that
+/// resolves to one never does.
+fn tcp_local_range(ip: IpAddr) -> Option<ipnet::IpNet> {
+	const RANGES: [&str; 4] = ["127.0.0.0/8", "169.254.0.0/16", "::1/128", "fe80::/10"];
+	RANGES
+		.iter()
+		.map(|range| range.parse::<ipnet::IpNet>().expect("valid range"))
+		.find(|range| range.contains(&ip))
+}
+
+/// Reports whether a tcp rule on the address's port names a CIDR that
+/// contains it, or a hostname that resolves to it. Names are resolved only
+/// when no CIDR decides.
+async fn tcp_rule_allows<F, Fut>(
+	policy: &protos::ateapi::EgressPolicy,
+	address: SocketAddr,
+	resolve: F,
+) -> bool
+where
+	F: Fn(&str) -> Fut,
+	Fut: std::future::Future<Output = Box<[IpAddr]>>,
+{
+	let ip = address.ip().to_canonical();
+	let local = tcp_local_range(ip);
+	let mut names = Vec::new();
+	for rule in &policy.rules {
+		// These fields form an API union. An invalid union cannot authorize traffic.
+		let (None, None, None, Some(tcp)) = (&rule.http, &rule.https, &rule.tls_passthrough, &rule.tcp)
+		else {
+			continue;
+		};
+		if port_rank(tcp.ports.as_ref(), address.port(), 0).is_none() {
+			continue;
+		}
+		if tcp.cidrs.iter().any(|cidr| {
+			cidr.parse::<ipnet::IpNet>().is_ok_and(|net| {
+				net.trunc() == net && net.contains(&ip) && local.is_none_or(|range| range.contains(&net))
+			})
+		}) {
+			return true;
+		}
+		if local.is_none() {
+			names.extend(
+				tcp
+					.hostnames
+					.iter()
+					.map(String::as_str)
+					.filter(|name| valid_hostname(name)),
+			);
+		}
+	}
+	names.sort_unstable();
+	names.dedup();
+	futures::future::join_all(names.into_iter().map(resolve))
+		.await
+		.iter()
+		.any(|addresses| {
+			addresses
+				.iter()
+				.any(|resolved| resolved.to_canonical() == ip)
+		})
+}
+
 #[derive(Clone, Copy)]
 enum MatchPhase {
 	HttpRequest,
@@ -771,17 +887,24 @@ fn matching_destination_rule<'a>(
 	let mut best = None;
 	for rule in &policy.rules {
 		// These fields form an API union. An invalid union cannot authorize traffic.
-		let (hostnames, ports, default_port) =
-			match (phase, &rule.http, &rule.https, &rule.tls_passthrough) {
-				(MatchPhase::HttpRequest, Some(http), None, None) => {
-					(&http.hostnames, http.ports.as_ref(), 80)
-				},
-				(MatchPhase::HttpsRequest | MatchPhase::ClientHello, None, Some(https), None) => {
-					(&https.hostnames, https.ports.as_ref(), 443)
-				},
-				(MatchPhase::ClientHello, None, None, Some(tls)) => (&tls.hostnames, tls.ports.as_ref(), 0),
-				_ => continue,
-			};
+		let (hostnames, ports, default_port) = match (
+			phase,
+			&rule.http,
+			&rule.https,
+			&rule.tls_passthrough,
+			&rule.tcp,
+		) {
+			(MatchPhase::HttpRequest, Some(http), None, None, None) => {
+				(&http.hostnames, http.ports.as_ref(), 80)
+			},
+			(MatchPhase::HttpsRequest | MatchPhase::ClientHello, None, Some(https), None, None) => {
+				(&https.hostnames, https.ports.as_ref(), 443)
+			},
+			(MatchPhase::ClientHello, None, None, Some(tls), None) => {
+				(&tls.hostnames, tls.ports.as_ref(), 0)
+			},
+			_ => continue,
+		};
 		let Some(port_rank) = port_rank(ports, port, default_port) else {
 			continue;
 		};
@@ -1928,6 +2051,218 @@ mod tests {
 			assert_eq!(
 				status(apply(&egress, &effects(&["a"], LIFETIME), &mut req).await),
 				::http::StatusCode::INTERNAL_SERVER_ERROR
+			);
+		}
+	}
+
+	fn tcp_rule(
+		hostnames: &[&str],
+		cidrs: &[&str],
+		ports: Option<protos::ateapi::Ports>,
+	) -> protos::ateapi::EgressRule {
+		protos::ateapi::EgressRule {
+			tcp: Some(protos::ateapi::TcpRule {
+				hostnames: hostnames.iter().map(|name| (*name).to_owned()).collect(),
+				cidrs: cidrs.iter().map(|cidr| (*cidr).to_owned()).collect(),
+				ports,
+			}),
+			..Default::default()
+		}
+	}
+
+	async fn tcp_allows(rules: Vec<protos::ateapi::EgressRule>, address: &str) -> bool {
+		let policy = protos::ateapi::EgressPolicy {
+			rules,
+			..Default::default()
+		};
+		tcp_rule_allows(&policy, address.parse().unwrap(), |name| {
+			let addresses: Box<[IpAddr]> = match name {
+				"git.example.com" => [
+					"192.0.2.10".parse().unwrap(),
+					"2001:db8::10".parse().unwrap(),
+				]
+				.into(),
+				"rebind.example.com" => [
+					"127.0.0.1".parse().unwrap(),
+					"169.254.169.254".parse().unwrap(),
+				]
+				.into(),
+				_ => [].into(),
+			};
+			async move { addresses }
+		})
+		.await
+	}
+
+	#[tokio::test]
+	async fn tcp_rules_match_cidrs_and_resolved_hostnames_on_their_ports() {
+		for (rule, address, allowed) in [
+			(
+				tcp_rule(&[], &["192.0.2.0/24"], ports(&[22])),
+				"192.0.2.7:22",
+				true,
+			),
+			(
+				tcp_rule(&[], &["192.0.2.0/24"], ports(&[22])),
+				"192.0.2.7:2222",
+				false,
+			),
+			(
+				tcp_rule(&[], &["192.0.2.0/24"], ports(&[22])),
+				"198.51.100.7:22",
+				false,
+			),
+			(
+				tcp_rule(&[], &["192.0.2.0/24"], all_ports()),
+				"192.0.2.7:5432",
+				true,
+			),
+			(
+				tcp_rule(&[], &["2001:db8::/32"], ports(&[22])),
+				"[2001:db8::1]:22",
+				true,
+			),
+			(
+				tcp_rule(&[], &["192.0.2.0/24"], ports(&[22])),
+				"[::ffff:192.0.2.7]:22",
+				true,
+			),
+			// A CIDR with host bits set is invalid and authorizes nothing.
+			(
+				tcp_rule(&[], &["192.0.2.7/24"], ports(&[22])),
+				"192.0.2.7:22",
+				false,
+			),
+			(
+				tcp_rule(&[], &["not-a-cidr"], ports(&[22])),
+				"192.0.2.7:22",
+				false,
+			),
+			(
+				tcp_rule(&["git.example.com"], &[], ports(&[22])),
+				"192.0.2.10:22",
+				true,
+			),
+			(
+				tcp_rule(&["git.example.com"], &[], ports(&[22])),
+				"[2001:db8::10]:22",
+				true,
+			),
+			(
+				tcp_rule(&["git.example.com"], &[], ports(&[22])),
+				"192.0.2.11:22",
+				false,
+			),
+			(
+				tcp_rule(&["git.example.com"], &[], ports(&[22])),
+				"192.0.2.10:443",
+				false,
+			),
+			(
+				tcp_rule(&["unknown.example.com"], &[], ports(&[22])),
+				"192.0.2.10:22",
+				false,
+			),
+			// Ports are required: a tcp rule has no default port.
+			(
+				tcp_rule(&[], &["192.0.2.0/24"], None),
+				"192.0.2.7:22",
+				false,
+			),
+		] {
+			assert_eq!(tcp_allows(vec![rule], address).await, allowed, "{address}");
+		}
+	}
+
+	#[tokio::test]
+	async fn tcp_reaches_loopback_and_link_local_only_through_a_cidr_inside_them() {
+		for (rule, address, allowed) in [
+			(
+				tcp_rule(&[], &["0.0.0.0/0"], all_ports()),
+				"127.0.0.1:15000",
+				false,
+			),
+			(
+				tcp_rule(&[], &["0.0.0.0/0"], all_ports()),
+				"169.254.169.254:80",
+				false,
+			),
+			(tcp_rule(&[], &["::/0"], all_ports()), "[::1]:15000", false),
+			(
+				tcp_rule(&["rebind.example.com"], &[], all_ports()),
+				"127.0.0.1:15000",
+				false,
+			),
+			(
+				tcp_rule(&["rebind.example.com"], &[], all_ports()),
+				"169.254.169.254:80",
+				false,
+			),
+			(
+				tcp_rule(&[], &["127.0.0.1/32"], all_ports()),
+				"127.0.0.1:15000",
+				true,
+			),
+			(
+				tcp_rule(&[], &["169.254.0.0/16"], all_ports()),
+				"169.254.169.254:80",
+				true,
+			),
+		] {
+			assert_eq!(tcp_allows(vec![rule], address).await, allowed, "{address}");
+		}
+	}
+
+	#[tokio::test]
+	async fn tcp_ignores_other_protocols_and_invalid_unions() {
+		let mut both = tcp_rule(&[], &["192.0.2.0/24"], ports(&[22]));
+		both.http = Some(protos::ateapi::HttpRule {
+			hostnames: vec!["*".to_owned()],
+			ports: ports(&[22]),
+			effects: None,
+		});
+		assert!(!tcp_allows(vec![both], "192.0.2.7:22").await);
+		assert!(
+			!tcp_allows(
+				vec![rule(EgressRequestProtocol::Http, &["*"], all_ports())],
+				"192.0.2.7:22"
+			)
+			.await
+		);
+		// A tcp rule never decides a request or a ClientHello.
+		let policy = protos::ateapi::EgressPolicy {
+			rules: vec![tcp_rule(&["git.example.com"], &[], all_ports())],
+			..Default::default()
+		};
+		assert_eq!(
+			tls_mode(&policy, "git.example.com", 22).unwrap(),
+			EgressTlsMode::InterceptDenied
+		);
+		assert!(
+			matching_rule(
+				&policy,
+				&request(EgressRequestProtocol::Http, "git.example.com", 22)
+			)
+			.is_err()
+		);
+	}
+
+	#[test]
+	fn tcp_destinations_name_a_single_host() {
+		for (address, routable) in [
+			("192.0.2.7", true),
+			("127.0.0.1", true),
+			("0.0.0.0", false),
+			("255.255.255.255", false),
+			("224.0.0.1", false),
+			("::", false),
+			("ff02::1", false),
+			("::ffff:0.0.0.0", false),
+		] {
+			assert_eq!(
+				tcp_destination_routable(address.parse().unwrap()),
+				routable,
+				"{address}"
 			);
 		}
 	}

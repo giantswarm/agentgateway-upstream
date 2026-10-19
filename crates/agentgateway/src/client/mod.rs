@@ -582,6 +582,12 @@ impl Client {
 		Client { client, connector }
 	}
 
+	/// Every address name resolves to through the resolver upstream calls dial
+	/// with. Empty when the name does not resolve.
+	pub async fn resolve_all(&self, name: Strng) -> Box<[IpAddr]> {
+		self.connector.resolver.resolve_all(name).await
+	}
+
 	pub async fn simple_call(&self, req: http::Request) -> Result<http::Response, ProxyError> {
 		let host = req
 			.uri()
