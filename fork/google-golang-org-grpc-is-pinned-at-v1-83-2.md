@@ -1,3 +1,17 @@
+---
+id: google-golang-org-grpc-is-pinned-at-v1-83-2
+fork: agentgateway
+theme: version-pins
+category: pin
+status: carried
+upstream:
+  outcome: fork-only
+  refs: [agentgateway/agentgateway#3658, golang/vulndb#6580]
+  exit: drop the downgrade
+depends_on: []
+commit: ba219016
+verified: 2026-10-19
+---
 # google.golang.org/grpc is pinned at v1.83.2
 
 - **Status:** carried

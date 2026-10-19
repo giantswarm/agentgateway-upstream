@@ -1,3 +1,17 @@
+---
+id: a-stateful-mcp-session-leaves-a-pinned-endpoint-that-is-gone
+fork: agentgateway
+theme: mcp-forwarder
+category: bugfix
+status: carried
+upstream:
+  outcome: to-file
+  refs: []
+  exit: file as a PR; narrow the new ProxyError variant to MCP first
+depends_on: []
+commit: ""
+verified: 2026-10-19
+---
 # A stateful MCP session leaves a pinned endpoint that is gone
 
 - **Status:** carried

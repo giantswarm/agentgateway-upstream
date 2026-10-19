@@ -1,3 +1,17 @@
+---
+id: the-build-uses-go-1-27-2-and-golang-org-x-net-v0-60-0
+fork: agentgateway
+theme: version-pins
+category: pin
+status: carried
+upstream:
+  outcome: drops-at-repin
+  refs: []
+  exit: drops when upstream builds with 1.27.2 or later
+depends_on: []
+commit: ""
+verified: 2026-10-19
+---
 # The build uses Go 1.27.2 and golang.org/x/net v0.60.0
 
 - **Status:** carried

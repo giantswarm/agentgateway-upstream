@@ -1,3 +1,17 @@
+---
+id: golang-org-x-net-v0-61-0-is-required
+fork: agentgateway
+theme: version-pins
+category: pin
+status: carried
+upstream:
+  outcome: drops-at-repin
+  refs: []
+  exit: drops when upstream requires v0.61.0 or later
+depends_on: []
+commit: ""
+verified: 2026-10-19
+---
 # golang.org/x/net v0.61.0 is required
 
 - **Status:** carried

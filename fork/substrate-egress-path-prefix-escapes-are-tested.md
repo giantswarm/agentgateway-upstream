@@ -1,3 +1,17 @@
+---
+id: substrate-egress-path-prefix-escapes-are-tested
+fork: agentgateway
+theme: credential-injection
+category: test
+status: carried
+upstream:
+  outcome: to-file
+  refs: []
+  exit: goes with the path_prefix PR
+depends_on: [substrate-egress-applies-credential-header-by-request-path-prefix]
+commit: ""
+verified: 2026-10-19
+---
 # The Substrate egress path-prefix escape forms are tested
 
 - **Status:** carried

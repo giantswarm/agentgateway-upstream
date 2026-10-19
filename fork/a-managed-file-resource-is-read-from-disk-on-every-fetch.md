@@ -1,3 +1,17 @@
+---
+id: a-managed-file-resource-is-read-from-disk-on-every-fetch
+fork: agentgateway
+theme: version-pins
+category: bugfix
+status: carried
+upstream:
+  outcome: drops-at-repin
+  refs: [agentgateway/agentgateway#3686, agentgateway/agentgateway#3751, agentgateway/agentgateway#3863]
+  exit: drops with the row above; rotation test already passes on upstream without it
+depends_on: [the-files-a-config-parse-reads-are-managed-dependencies]
+commit: 4078f630
+verified: 2026-10-19
+---
 # A managed file resource is read from disk on every fetch
 
 - **Status:** carried

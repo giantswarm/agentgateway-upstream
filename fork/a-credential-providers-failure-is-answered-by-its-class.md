@@ -1,3 +1,17 @@
+---
+id: a-credential-providers-failure-is-answered-by-its-class
+fork: agentgateway
+theme: credential-injection
+category: feature
+status: carried
+upstream:
+  outcome: open
+  refs: [agent-substrate/substrate#2555, agentgateway/agentgateway#3524, agentgateway/agentgateway#3875]
+  exit: 'Substrate contract first (as#2555), then #3875; parts 2 and 3 unfiled'
+depends_on: [agent-substrate/substrate#2555]
+commit: 971e8a51
+verified: 2026-10-19
+---
 # A credential provider's failure is answered by its class
 
 - **Status:** carried

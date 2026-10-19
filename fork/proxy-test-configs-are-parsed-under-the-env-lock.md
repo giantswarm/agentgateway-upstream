@@ -1,3 +1,17 @@
+---
+id: proxy-test-configs-are-parsed-under-the-env-lock
+fork: agentgateway
+theme: test-flakes
+category: test
+status: carried
+upstream:
+  outcome: to-file
+  refs: []
+  exit: file in the test-flake batch
+depends_on: []
+commit: ""
+verified: 2026-10-19
+---
 # Proxy test configs are parsed under the env lock
 
 - **Status:** carried

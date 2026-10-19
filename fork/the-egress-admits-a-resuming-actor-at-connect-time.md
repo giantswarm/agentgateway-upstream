@@ -1,3 +1,17 @@
+---
+id: the-egress-admits-a-resuming-actor-at-connect-time
+fork: agentgateway
+theme: session-lifecycle
+category: bugfix
+status: carried
+upstream:
+  outcome: drops-at-repin
+  refs: [agentgateway/agentgateway#3876, agentgateway/agentgateway#3882]
+  exit: 're-pin onto a commit containing 9d36620d; close #3876'
+depends_on: [agent-substrate/substrate#1543, agent-substrate/substrate#2117, giantswarm/substrate:let-actors-egress-through-while-resumes]
+commit: 52f1c49a
+verified: 2026-10-19
+---
 # The egress admits a resuming actor at CONNECT time
 
 - **Status:** carried

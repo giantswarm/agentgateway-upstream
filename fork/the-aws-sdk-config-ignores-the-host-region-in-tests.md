@@ -1,3 +1,17 @@
+---
+id: the-aws-sdk-config-ignores-the-host-region-in-tests
+fork: agentgateway
+theme: test-flakes
+category: test
+status: carried
+upstream:
+  outcome: to-file
+  refs: []
+  exit: file in the test-flake batch
+depends_on: []
+commit: ""
+verified: 2026-10-19
+---
 # The AWS SDK config ignores the host region in tests
 
 - **Status:** carried
