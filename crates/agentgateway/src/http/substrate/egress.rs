@@ -789,8 +789,9 @@ fn tcp_destination_routable(ip: IpAddr) -> bool {
 /// Ranges whose addresses are the gateway's or its node's: loopback,
 /// link-local (the cloud metadata service at 169.254.169.254 among them), and
 /// the metadata and platform services clouds serve elsewhere (AWS's IPv6
-/// metadata service, Alibaba Cloud's, Azure's WireServer).
-const TCP_LOCAL_RANGES: [&str; 7] = [
+/// metadata service, Alibaba Cloud's, Azure's WireServer), and the local-use
+/// NAT64 prefix, whose embedded addresses a gateway cannot tell apart.
+const TCP_LOCAL_RANGES: [&str; 8] = [
 	"127.0.0.0/8",
 	"169.254.0.0/16",
 	"100.100.100.200/32",
@@ -798,6 +799,7 @@ const TCP_LOCAL_RANGES: [&str; 7] = [
 	"::1/128",
 	"fe80::/10",
 	"fd00:ec2::254/128",
+	"64:ff9b:1::/48",
 ];
 
 /// The range of TCP_LOCAL_RANGES an address is in, or the gateway's own
@@ -2314,6 +2316,11 @@ mod tests {
 				tcp_rule(&[], &["64:ff9b::7f00:1/128"], all_ports()),
 				"[64:ff9b::7f00:1]:15000",
 				true,
+			),
+			(
+				tcp_rule(&[], &["::/0"], all_ports()),
+				"[64:ff9b:1:7f00:1::]:15000",
+				false,
 			),
 		] {
 			assert_eq!(tcp_allows(vec![rule], address).await, allowed, "{address}");
