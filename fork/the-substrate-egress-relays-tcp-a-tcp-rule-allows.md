@@ -4,19 +4,18 @@ fork: agentgateway
 theme: egress-policies
 category: feature
 status: carried
+commits:
+  - 'feat(substrate): relay TCP a tcp rule allows'
+  - 'fix(substrate): a tcp rule reaches metadata services and the gateway only by a narrow CIDR'
+  - 'fix(substrate): the local-use NAT64 prefix is local for a tcp rule'
 upstream:
   outcome: to-file
-  refs: []
+  refs: [giantswarm/substrate#164]
   exit: file as a PR after the Substrate API's tcp rule is filed upstream
 depends_on: [giantswarm/substrate#164]
-commit: ""
 verified: 2026-10-19
 ---
 # The Substrate egress relays TCP a tcp rule allows
-
-- **Status:** carried
-- **Upstream:** to file — prepared in the fork: branch `upstream/substrate-egress-tcp-rule`. It follows the Substrate API's `tcp` rule, prepared on the Substrate line's branch `upstream/egress-tcp-rule` ([giantswarm/substrate#164](https://github.com/giantswarm/substrate/issues/164)).
-- **Our commit:** the `feat(substrate): relay TCP a tcp rule allows` commit on `giantswarm`
 
 ## Change
 
@@ -27,3 +26,9 @@ verified: 2026-10-19
 The Substrate line carries the `tcp` rule ([giantswarm/substrate#164](https://github.com/giantswarm/substrate/issues/164)): an agent uses git over SSH or a database whose protocol is not TLS only when its author declares the host and port. agentgateway is that line's egress dataplane, so the rule takes effect only with this change; without it every such stream is closed.
 
 Drops at the re-pin onto an upstream commit that contains the upstream change.
+
+## History
+
+to file — prepared in the fork: branch `upstream/substrate-egress-tcp-rule`. It follows the Substrate API's `tcp` rule, prepared on the Substrate line's branch `upstream/egress-tcp-rule` ([giantswarm/substrate#164](https://github.com/giantswarm/substrate/issues/164)).
+
+the `feat(substrate): relay TCP a tcp rule allows` commit on `giantswarm`

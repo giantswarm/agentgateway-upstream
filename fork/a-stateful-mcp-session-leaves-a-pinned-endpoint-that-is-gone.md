@@ -4,19 +4,16 @@ fork: agentgateway
 theme: mcp-forwarder
 category: bugfix
 status: carried
+commits:
+  - 'fix(mcp): drop a stateful session''s pin when its endpoint is gone'
 upstream:
   outcome: to-file
   refs: []
   exit: file as a PR; narrow the new ProxyError variant to MCP first
 depends_on: []
-commit: 766edf42
 verified: 2026-10-19
 ---
 # A stateful MCP session leaves a pinned endpoint that is gone
-
-- **Status:** carried
-- **Upstream:** to file — prepared in the fork: branch `upstream/mcp-unpin-gone-endpoint`; upstream `main` @ `884c2e6e` keeps the pin for the life of the session (`McpHttpClient` in `mcp/upstream/client.rs`). Drops at the re-pin onto a commit containing it
-- **Our commit:** the `fix(mcp): drop a stateful session's pin when its endpoint is gone` commit
 
 ## Change
 
@@ -25,3 +22,9 @@ A stateful MCP session through a Service backend stays pinned to the endpoint of
 ## Reason
 
 A stateful MCP session through a Service-backed target stayed pinned to the pod IP of its first response: once that pod was replaced, every request of the session failed (`500` "no healthy backends", or a connect error after the dial timeout while the old endpoint was still listed) until the client initialized a new session ([giantswarm/agentgateway-upstream#90](https://github.com/giantswarm/agentgateway-upstream/issues/90)). A `static.host` target is an opaque backend and is never pinned
+
+## History
+
+to file — prepared in the fork: branch `upstream/mcp-unpin-gone-endpoint`; upstream `main` @ `884c2e6e` keeps the pin for the life of the session (`McpHttpClient` in `mcp/upstream/client.rs`). Drops at the re-pin onto a commit containing it
+
+the `fix(mcp): drop a stateful session's pin when its endpoint is gone` commit
