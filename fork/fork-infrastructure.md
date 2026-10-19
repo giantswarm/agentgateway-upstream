@@ -15,7 +15,6 @@ commits:
   - 'ci(sync): land a checked sync/** candidate on giantswarm instead of pushing an unchecked rebase'
   - 'ci(fork): the ledger cites public repositories only'
   - 'ci(fork): drop the throwaway line'
-  - 'ci(fork): check the ledger header schema'
   - 'chore: declare Renovate off on the fork line'
   - 'mcp: name the limit and the size when an upstream response exceeds the buffer'
   - 'revert(mcp): drop the named buffer error on an MCP upstream''s response'
