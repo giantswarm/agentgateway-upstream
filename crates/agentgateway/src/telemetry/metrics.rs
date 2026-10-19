@@ -1,4 +1,7 @@
+use std::collections::HashMap;
 use std::fmt::Debug;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use agent_core::metrics::{
 	CustomField, DefaultedUnknown, EncodeArc, EncodeDebug, EncodeDisplay, MetricRegistry,
@@ -7,6 +10,7 @@ use agent_core::metrics::{
 use agent_core::strng::RichStrng;
 use agent_core::version;
 use frozen_collections::FzHashSet;
+use parking_lot::Mutex;
 use prometheus_client::encoding::EncodeLabelSet;
 use prometheus_client::metrics::counter;
 use prometheus_client::metrics::family::{Family, MetricConstructor};
@@ -205,6 +209,98 @@ pub struct SubstrateRouteLabels {
 	pub ate_router_resume: EncodeDisplay<ResumeDisposition>,
 }
 
+/// One destination an actor's egress policy refused. The actor is part of the
+/// series so a refusal can be shown on the Session or run that met it.
+#[derive(Clone, Hash, Debug, PartialEq, Eq, EncodeLabelSet)]
+pub struct EgressRefusalLabels {
+	pub ate_atespace: String,
+	pub ate_actor_name: String,
+	/// `http`, `https` (a decrypted request or a TLS connection by its SNI) or `tcp`.
+	pub scheme: &'static str,
+	/// The name the actor asked for: the HTTP authority, the SNI, or the address of a tcp connection.
+	pub host: String,
+	pub port: u16,
+}
+
+/// How long a refused destination's series stays exported after its last
+/// refusal. A series is per actor, and actors come and go, so an idle one is
+/// dropped; the scraper keeps its samples.
+const EGRESS_REFUSAL_IDLE: Duration = Duration::from_secs(3600);
+/// How often idle series are looked for.
+const EGRESS_REFUSAL_SWEEP: Duration = Duration::from_secs(60);
+/// The destinations one actor has series of. The actor names the hosts, so
+/// more fold into `host="other"`, `port="0"`.
+const EGRESS_REFUSAL_DESTINATIONS_PER_ACTOR: usize = 16;
+/// The series of all actors together. More fold into `ate_actor_name="other"`.
+const EGRESS_REFUSAL_SERIES: usize = 4096;
+const EGRESS_REFUSAL_OTHER: &str = "other";
+
+/// The egress policy refusals per actor and destination, bounded by
+/// [`EGRESS_REFUSAL_IDLE`], [`EGRESS_REFUSAL_DESTINATIONS_PER_ACTOR`] and
+/// [`EGRESS_REFUSAL_SERIES`].
+#[derive(Debug, Default, Clone)]
+pub struct EgressRefusals {
+	family: Family<EgressRefusalLabels, counter::Counter>,
+	state: Arc<Mutex<EgressRefusalState>>,
+}
+
+#[derive(Debug, Default)]
+struct EgressRefusalState {
+	last_seen: HashMap<EgressRefusalLabels, Instant>,
+	swept: Option<Instant>,
+}
+
+impl EgressRefusals {
+	pub fn record(&self, labels: EgressRefusalLabels) {
+		self.record_at(labels, Instant::now());
+	}
+
+	fn record_at(&self, mut labels: EgressRefusalLabels, now: Instant) {
+		let mut state = self.state.lock();
+		if state
+			.swept
+			.is_none_or(|swept| now.saturating_duration_since(swept) >= EGRESS_REFUSAL_SWEEP)
+		{
+			state.last_seen.retain(|series, seen| {
+				let live = now.saturating_duration_since(*seen) < EGRESS_REFUSAL_IDLE;
+				if !live {
+					self.family.remove(series);
+				}
+				live
+			});
+			state.swept = Some(now);
+		}
+		if !state.last_seen.contains_key(&labels) {
+			let actor_destinations = state
+				.last_seen
+				.keys()
+				.filter(|series| {
+					series.ate_atespace == labels.ate_atespace
+						&& series.ate_actor_name == labels.ate_actor_name
+						&& series.host != EGRESS_REFUSAL_OTHER
+				})
+				.count();
+			if actor_destinations >= EGRESS_REFUSAL_DESTINATIONS_PER_ACTOR {
+				labels.host = EGRESS_REFUSAL_OTHER.to_owned();
+				labels.port = 0;
+			}
+			if !state.last_seen.contains_key(&labels) && state.last_seen.len() >= EGRESS_REFUSAL_SERIES {
+				labels.ate_atespace = String::new();
+				labels.ate_actor_name = EGRESS_REFUSAL_OTHER.to_owned();
+				labels.host = EGRESS_REFUSAL_OTHER.to_owned();
+				labels.port = 0;
+			}
+		}
+		self.family.get_or_create(&labels).inc();
+		state.last_seen.insert(labels, now);
+	}
+
+	/// The refusals one series counts, while it is exported.
+	pub fn count(&self, labels: &EgressRefusalLabels) -> Option<u64> {
+		self.family.get(labels).map(|counter| counter.get())
+	}
+}
+
 #[derive(
 	Copy, Clone, Hash, Debug, PartialEq, Eq, prometheus_client::encoding::EncodeLabelValue, Default,
 )]
@@ -337,6 +433,9 @@ pub struct Metrics {
 
 	// Number of requests currently waiting for a Substrate actor to become routable.
 	pub substrate_request_parking_active: Gauge,
+
+	// Destinations an actor's egress policy refused, per actor.
+	pub substrate_egress_refusals: EgressRefusals,
 }
 
 // FilteredRegistry is a wrapper around Registry that allows to filter out certain metrics.
@@ -471,6 +570,15 @@ impl Metrics {
 					"substrate_request_parking_active",
 					"Number of requests waiting for a Substrate actor to become routable",
 					m.clone(),
+				);
+				m
+			},
+			substrate_egress_refusals: {
+				let m = EgressRefusals::default();
+				registry.register(
+					"atenet_egress_refusals",
+					"Requests and connections an actor's egress policy refused, per actor and destination",
+					m.family.clone(),
 				);
 				m
 			},
@@ -712,6 +820,64 @@ mod tests {
 	use prometheus_client::registry::Registry;
 
 	use super::*;
+
+	fn refusal(actor: &str) -> EgressRefusalLabels {
+		EgressRefusalLabels {
+			ate_atespace: "agents".to_owned(),
+			ate_actor_name: actor.to_owned(),
+			scheme: "https",
+			host: "proxy.golang.org".to_owned(),
+			port: 443,
+		}
+	}
+
+	#[test]
+	fn an_egress_refusal_series_is_dropped_once_idle() {
+		let refusals = EgressRefusals::default();
+		let start = Instant::now();
+		refusals.record_at(refusal("session-a"), start);
+		refusals.record_at(refusal("session-a"), start);
+		refusals.record_at(refusal("session-b"), start + EGRESS_REFUSAL_IDLE / 2);
+		assert_eq!(refusals.count(&refusal("session-a")), Some(2));
+
+		refusals.record_at(refusal("session-b"), start + EGRESS_REFUSAL_IDLE);
+		assert_eq!(refusals.count(&refusal("session-a")), None);
+		assert_eq!(refusals.count(&refusal("session-b")), Some(2));
+	}
+
+	#[test]
+	fn an_actors_destinations_beyond_the_bound_fold_into_other() {
+		let refusals = EgressRefusals::default();
+		let now = Instant::now();
+		let destination = |host: String| EgressRefusalLabels {
+			host,
+			..refusal("session-a")
+		};
+		for n in 0..EGRESS_REFUSAL_DESTINATIONS_PER_ACTOR + 2 {
+			refusals.record_at(destination(format!("host-{n}.example")), now);
+		}
+		refusals.record_at(destination("host-0.example".to_owned()), now);
+		refusals.record_at(refusal("session-b"), now);
+
+		assert_eq!(
+			refusals.count(&destination("host-0.example".to_owned())),
+			Some(2)
+		);
+		assert_eq!(
+			refusals.count(&destination(format!(
+				"host-{EGRESS_REFUSAL_DESTINATIONS_PER_ACTOR}.example"
+			))),
+			None
+		);
+		assert_eq!(
+			refusals.count(&EgressRefusalLabels {
+				port: 0,
+				..destination(EGRESS_REFUSAL_OTHER.to_owned())
+			}),
+			Some(2)
+		);
+		assert_eq!(refusals.count(&refusal("session-b")), Some(1));
+	}
 
 	#[test]
 	fn histogram_mode_controls_collected_representations() {
