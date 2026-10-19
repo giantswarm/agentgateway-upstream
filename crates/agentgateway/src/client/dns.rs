@@ -106,21 +106,30 @@ impl CacheEntry {
 	}
 
 	pub async fn next(&self) -> Option<IpAddr> {
+		self.current().await.and_then(|cb| cb.get_and_advance())
+	}
+
+	/// Every address of the current answer.
+	pub async fn all(&self) -> Box<[IpAddr]> {
+		self
+			.current()
+			.await
+			.map(|cb| cb.data.clone())
+			.unwrap_or_default()
+	}
+
+	async fn current(&self) -> Option<Arc<CircularBuffer<IpAddr>>> {
 		// Mark as active
 		self.active.store(true, Ordering::Relaxed);
 		// Is there an entry right now? If so return it.
 		let notify = self.notify.notified();
-		if let Some(entry) = self.entries.load().as_ref() {
-			return entry.get_and_advance();
+		if let Some(entry) = self.entries.load_full() {
+			return Some(entry);
 		}
 		// Wait until a change happens
 		notify.await;
 		// Now attempt to load or return None if there is nothing available
-		self
-			.entries
-			.load()
-			.as_ref()
-			.and_then(|cb| cb.get_and_advance())
+		self.entries.load_full()
 	}
 }
 
@@ -161,38 +170,45 @@ impl CachedResolver {
 	}
 
 	pub async fn resolve(&self, name: Strng) -> anyhow::Result<IpAddr> {
-		// Check if we already have an entry
-		let entry = {
-			let mut cache = self.entries.lock().unwrap();
-			let existing_entry = cache.get(&name).cloned();
-			if let Some(entry) = existing_entry {
-				// Mark as active and return next IP
-				entry.active.store(true, Ordering::Relaxed);
-				entry
-			} else {
-				let entry = Arc::new(CacheEntry {
-					active: AtomicBool::new(false),
-					entries: Default::default(),
-					notify: Default::default(),
-					background_task: Default::default(),
-				});
-
-				cache.insert(name.clone(), entry.clone());
-				// Start background task
-				let bg_entry = entry.clone();
-				let dns = self.dns.clone();
-				let cache = self.entries.clone();
-				let handle = tokio::task::spawn(async move {
-					bg_entry.background(name, dns, cache).await;
-				});
-				entry.background_task.store(Some(Arc::new(handle)));
-
-				entry
-			}
-		};
-
 		// Return next IP
-		entry.next().await.ok_or_else(|| anyhow!("no ip"))
+		self
+			.entry(name)
+			.next()
+			.await
+			.ok_or_else(|| anyhow!("no ip"))
+	}
+
+	/// Every address name resolves to, from the same cache as resolve. Empty
+	/// when the name does not resolve.
+	pub async fn resolve_all(&self, name: Strng) -> Box<[IpAddr]> {
+		self.entry(name).all().await
+	}
+
+	fn entry(&self, name: Strng) -> Arc<CacheEntry> {
+		let mut cache = self.entries.lock().unwrap();
+		if let Some(entry) = cache.get(&name).cloned() {
+			// Mark as active
+			entry.active.store(true, Ordering::Relaxed);
+			return entry;
+		}
+		let entry = Arc::new(CacheEntry {
+			active: AtomicBool::new(false),
+			entries: Default::default(),
+			notify: Default::default(),
+			background_task: Default::default(),
+		});
+
+		cache.insert(name.clone(), entry.clone());
+		// Start background task
+		let bg_entry = entry.clone();
+		let dns = self.dns.clone();
+		let cache = self.entries.clone();
+		let handle = tokio::task::spawn(async move {
+			bg_entry.background(name, dns, cache).await;
+		});
+		entry.background_task.store(Some(Arc::new(handle)));
+
+		entry
 	}
 }
 

@@ -4,7 +4,10 @@ mod egress_actor_resolution;
 mod ingress;
 
 pub use egress::SubstrateEgress;
-pub(crate) use egress::{EgressRequestProtocol, EgressTlsMode, authorize_tls, reject_upgrade};
+pub(crate) use egress::{
+	EgressConnectAddress, EgressRequestProtocol, EgressTlsMode, authorize_tcp, authorize_tls,
+	reject_upgrade,
+};
 pub(crate) use egress_actor_resolution::ActorIdentity;
 pub use egress_actor_resolution::EgressActorResolution;
 pub use ingress::SubstrateIngress;

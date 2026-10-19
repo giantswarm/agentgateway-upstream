@@ -65,6 +65,30 @@ async fn test_basic_resolution() {
 	assert_eq!(ip1, ip3);
 }
 
+#[tokio::test]
+async fn test_resolve_all() {
+	let mock = Arc::new(Mock::new());
+	mock.add_response("example.com", vec![IP1, IP2], 60);
+
+	let resolver = CachedResolver {
+		dns: Arc::new(Resolver::Mock(mock)),
+		entries: Arc::new(Mutex::new(HashMap::new())),
+	};
+
+	assert_eq!(
+		&*resolver.resolve_all("example.com".into()).await,
+		&[IP1, IP2]
+	);
+	// It does not advance the round-robin of resolve.
+	assert_eq!(resolver.resolve("example.com".into()).await.unwrap(), IP1);
+	assert!(
+		resolver
+			.resolve_all("missing.example".into())
+			.await
+			.is_empty()
+	);
+}
+
 #[tokio::test(start_paused = true)]
 async fn test_ip_change() {
 	agent_core::telemetry::testing::setup_test_logging();
