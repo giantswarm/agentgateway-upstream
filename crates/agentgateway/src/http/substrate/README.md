@@ -27,8 +27,10 @@ A stream that is neither TLS nor HTTP is decided by the `tcp` rules on the
 address and port the CONNECT named (an IP literal; a hostname CONNECT carries
 none): a CIDR containing the address, or a hostname the gateway resolves to
 it. The backend is that address, whatever the route names. Unspecified,
-multicast and broadcast addresses are refused; loopback and link-local ones
-only match a CIDR inside those ranges, never a hostname or a wider CIDR. A
+multicast and broadcast addresses are refused. The gateway's and its node's
+addresses (loopback, link-local, the clouds' metadata and platform services,
+the gateway's own address, and their NAT64 forms) only match a CIDR inside
+those ranges, never a hostname or a wider CIDR. A
 denied stream is closed with no bytes.
 No matching handler also closes
 the connection. Server-first connections time out during protocol detection.

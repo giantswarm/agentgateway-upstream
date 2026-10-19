@@ -725,10 +725,14 @@ fn tls_mode(
 	})
 }
 
-/// The address an actor's CONNECT named, set only when it named an IP literal.
-/// A tcp rule decides on it alone.
+/// The address an actor's CONNECT named, set only when it named an IP literal,
+/// and the gateway's own address the CONNECT arrived on. A tcp rule decides on
+/// the first; the second is the gateway itself.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct EgressConnectAddress(pub SocketAddr);
+pub(crate) struct EgressConnectAddress {
+	pub target: SocketAddr,
+	pub gateway: IpAddr,
+}
 
 /// Authorizes a stream that is neither TLS nor HTTP against the actor's tcp
 /// rules, on the address and port its CONNECT named, and pins the backend to
@@ -744,7 +748,10 @@ pub(crate) async fn authorize_tcp(
 	let resolution = connection.get::<EgressActorResolution>().ok_or_else(|| {
 		ProxyError::SubstrateEgressDenied("missing actor egress control API".to_owned())
 	})?;
-	let Some(EgressConnectAddress(address)) = connection.get::<EgressConnectAddress>().copied()
+	let Some(EgressConnectAddress {
+		target: address,
+		gateway,
+	}) = connection.get::<EgressConnectAddress>().copied()
 	else {
 		return Err(ProxyError::SubstrateEgressDenied(
 			"tcp egress needs a CONNECT to an IP address".to_owned(),
@@ -757,7 +764,11 @@ pub(crate) async fn authorize_tcp(
 	}
 	let policy = fetch_policy(&resolution.target, client, identity).await?;
 	let upstream = &client.inputs.upstream;
-	if !tcp_rule_allows(&policy, address, |name| upstream.resolve_all(name.into())).await {
+	if !tcp_rule_allows(&policy, address, gateway, |name| {
+		upstream.resolve_all(name.into())
+	})
+	.await
+	{
 		return Err(ProxyError::SubstrateEgressDenied(format!(
 			"actor egress policy denied tcp destination {address}"
 		)));
@@ -775,13 +786,38 @@ fn tcp_destination_routable(ip: IpAddr) -> bool {
 	}
 }
 
-/// The loopback or link-local range an address is in. Those addresses are
-/// the gateway's own or its node's (a cloud metadata service among them), so
-/// only a CIDR inside the range reaches them: a wider CIDR or a hostname that
-/// resolves to one never does.
-fn tcp_local_range(ip: IpAddr) -> Option<ipnet::IpNet> {
-	const RANGES: [&str; 4] = ["127.0.0.0/8", "169.254.0.0/16", "::1/128", "fe80::/10"];
-	RANGES
+/// Ranges whose addresses are the gateway's or its node's: loopback,
+/// link-local (the cloud metadata service at 169.254.169.254 among them), and
+/// the metadata and platform services clouds serve elsewhere (AWS's IPv6
+/// metadata service, Alibaba Cloud's, Azure's WireServer).
+const TCP_LOCAL_RANGES: [&str; 7] = [
+	"127.0.0.0/8",
+	"169.254.0.0/16",
+	"100.100.100.200/32",
+	"168.63.129.16/32",
+	"::1/128",
+	"fe80::/10",
+	"fd00:ec2::254/128",
+];
+
+/// The range of TCP_LOCAL_RANGES an address is in, or the gateway's own
+/// address as a single-address range. Only a CIDR inside that range reaches
+/// it: a wider CIDR or a hostname that resolves to it never does. An address
+/// of the NAT64 well-known prefix (64:ff9b::/96) is local as a whole when the
+/// IPv4 address it embeds is.
+fn tcp_local_range(ip: IpAddr, gateway: IpAddr) -> Option<ipnet::IpNet> {
+	if let IpAddr::V6(v6) = ip
+		&& let [0x0064, 0xff9b, 0, 0, 0, 0, high, low] = v6.segments()
+	{
+		let embedded = IpAddr::V4(std::net::Ipv4Addr::from(
+			(u32::from(high) << 16) | u32::from(low),
+		));
+		return tcp_local_range(embedded, gateway).map(|_| ipnet::IpNet::from(ip));
+	}
+	if ip == gateway.to_canonical() {
+		return Some(ipnet::IpNet::from(ip));
+	}
+	TCP_LOCAL_RANGES
 		.iter()
 		.map(|range| range.parse::<ipnet::IpNet>().expect("valid range"))
 		.find(|range| range.contains(&ip))
@@ -793,6 +829,7 @@ fn tcp_local_range(ip: IpAddr) -> Option<ipnet::IpNet> {
 async fn tcp_rule_allows<F, Fut>(
 	policy: &protos::ateapi::EgressPolicy,
 	address: SocketAddr,
+	gateway: IpAddr,
 	resolve: F,
 ) -> bool
 where
@@ -800,7 +837,7 @@ where
 	Fut: std::future::Future<Output = Box<[IpAddr]>>,
 {
 	let ip = address.ip().to_canonical();
-	let local = tcp_local_range(ip);
+	let local = tcp_local_range(ip, gateway);
 	let mut names = Vec::new();
 	for rule in &policy.rules {
 		// These fields form an API union. An invalid union cannot authorize traffic.
@@ -2070,12 +2107,14 @@ mod tests {
 		}
 	}
 
+	const GATEWAY: IpAddr = IpAddr::V4(std::net::Ipv4Addr::new(10, 0, 0, 5));
+
 	async fn tcp_allows(rules: Vec<protos::ateapi::EgressRule>, address: &str) -> bool {
 		let policy = protos::ateapi::EgressPolicy {
 			rules,
 			..Default::default()
 		};
-		tcp_rule_allows(&policy, address.parse().unwrap(), |name| {
+		tcp_rule_allows(&policy, address.parse().unwrap(), GATEWAY, |name| {
 			let addresses: Box<[IpAddr]> = match name {
 				"git.example.com" => [
 					"192.0.2.10".parse().unwrap(),
@@ -2085,6 +2124,7 @@ mod tests {
 				"rebind.example.com" => [
 					"127.0.0.1".parse().unwrap(),
 					"169.254.169.254".parse().unwrap(),
+					"10.0.0.5".parse().unwrap(),
 				]
 				.into(),
 				_ => [].into(),
@@ -2175,7 +2215,7 @@ mod tests {
 	}
 
 	#[tokio::test]
-	async fn tcp_reaches_loopback_and_link_local_only_through_a_cidr_inside_them() {
+	async fn tcp_reaches_local_addresses_only_through_a_cidr_inside_them() {
 		for (rule, address, allowed) in [
 			(
 				tcp_rule(&[], &["0.0.0.0/0"], all_ports()),
@@ -2188,6 +2228,26 @@ mod tests {
 				false,
 			),
 			(tcp_rule(&[], &["::/0"], all_ports()), "[::1]:15000", false),
+			(
+				tcp_rule(&[], &["::/0"], all_ports()),
+				"[::ffff:127.0.0.1]:15000",
+				false,
+			),
+			(
+				tcp_rule(&[], &["::/0"], all_ports()),
+				"[fd00:ec2::254]:80",
+				false,
+			),
+			(
+				tcp_rule(&[], &["100.64.0.0/10"], all_ports()),
+				"100.100.100.200:80",
+				false,
+			),
+			(
+				tcp_rule(&[], &["168.63.0.0/16"], all_ports()),
+				"168.63.129.16:80",
+				false,
+			),
 			(
 				tcp_rule(&["rebind.example.com"], &[], all_ports()),
 				"127.0.0.1:15000",
@@ -2206,6 +2266,53 @@ mod tests {
 			(
 				tcp_rule(&[], &["169.254.0.0/16"], all_ports()),
 				"169.254.169.254:80",
+				true,
+			),
+			(
+				tcp_rule(&[], &["fd00:ec2::254/128"], all_ports()),
+				"[fd00:ec2::254]:80",
+				true,
+			),
+			// The gateway's own address, among its peers.
+			(
+				tcp_rule(&[], &["10.0.0.0/8"], all_ports()),
+				"10.0.0.5:15000",
+				false,
+			),
+			(
+				tcp_rule(&["rebind.example.com"], &[], all_ports()),
+				"10.0.0.5:15000",
+				false,
+			),
+			(
+				tcp_rule(&[], &["10.0.0.0/8"], all_ports()),
+				"10.0.0.6:15000",
+				true,
+			),
+			(
+				tcp_rule(&[], &["10.0.0.5/32"], all_ports()),
+				"10.0.0.5:15000",
+				true,
+			),
+			// NAT64 forms of local addresses.
+			(
+				tcp_rule(&[], &["64:ff9b::/96"], all_ports()),
+				"[64:ff9b::7f00:1]:15000",
+				false,
+			),
+			(
+				tcp_rule(&[], &["64:ff9b::/96"], all_ports()),
+				"[64:ff9b::a9fe:a9fe]:80",
+				false,
+			),
+			(
+				tcp_rule(&[], &["64:ff9b::/96"], all_ports()),
+				"[64:ff9b::c000:207]:22",
+				true,
+			),
+			(
+				tcp_rule(&[], &["64:ff9b::7f00:1/128"], all_ports()),
+				"[64:ff9b::7f00:1]:15000",
 				true,
 			),
 		] {
