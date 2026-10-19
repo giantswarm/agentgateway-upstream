@@ -75,6 +75,7 @@ message EgressRule {
   HTTPRule http = 1;
   HTTPSRule https = 2;
   TLSPassthroughRule tls_passthrough = 3;
+  TCPRule tcp = 4;
 }
 
 message HTTPRule {
@@ -94,6 +95,15 @@ message HTTPSRule {
 message TLSPassthroughRule {
   repeated string hostnames = 1;
   Ports ports = 2;
+}
+
+// Decides a stream that is neither TLS nor HTTP, on the address and port the
+// actor dialed. A hostname matches when it resolves to that address from the
+// gateway.
+message TCPRule {
+  repeated string hostnames = 1;
+  repeated string cidrs = 2;
+  Ports ports = 3;
 }
 
 message Ports {

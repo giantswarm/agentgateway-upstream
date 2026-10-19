@@ -15,6 +15,7 @@ handlers:
 - An HTTPS listener with `dynamicCa` TLS configuration and an HTTP route for
   intercepted HTTPS. Actors must trust that CA.
 - A TLS listener without termination and a TCP route for passthrough.
+- A TCP listener and a TCP route with a dynamic backend for the `tcp` rules.
 
 These listeners can cover the same names. The actor's policy chooses HTTPS
 interception or TLS passthrough before listener selection. An unmatched name or
@@ -22,6 +23,15 @@ port selects interception so the gateway can return 403 before routing or auth
 policies run. This completes TLS with the actor without contacting an upstream;
 an allowed HTTP authority cannot override that connection's denial. Missing or
 invalid SNI, unsupported protocols, and failed policy lookups close the connection.
+A stream that is neither TLS nor HTTP is decided by the `tcp` rules on the
+address and port the CONNECT named (an IP literal; a hostname CONNECT carries
+none): a CIDR containing the address, or a hostname the gateway resolves to
+it. The backend is that address, whatever the route names. Unspecified,
+multicast and broadcast addresses are refused. The gateway's and its node's
+addresses (loopback, link-local, the clouds' metadata and platform services,
+the gateway's own address, and their NAT64 forms) only match a CIDR inside
+those ranges, never a hostname or a wider CIDR. A
+denied stream is closed with no bytes.
 No matching handler also closes
 the connection. Server-first connections time out during protocol detection.
 Cleartext detection uses the gateway's existing standard HTTP method list and
