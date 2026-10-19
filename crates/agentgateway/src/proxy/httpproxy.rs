@@ -28,7 +28,9 @@ use crate::http::backendtls::{
 use crate::http::buffer::Buffer;
 use crate::http::ext_proc::{ExtProcRequest, InferenceRoutingDestinationMode};
 use crate::http::filters::{AutoHostname, BackendRequestTimeout};
-use crate::http::substrate::{ActorIdentity, EgressRequestProtocol, EgressTlsMode};
+use crate::http::substrate::{
+	ActorIdentity, EgressRequestProtocol, EgressTlsMode, destination_denied,
+};
 use crate::http::transformation_cel::Transformation;
 use crate::http::x_headers::TRACEPARENT;
 use crate::http::{
@@ -856,10 +858,22 @@ impl HTTPProxy {
 			log.method = Some(req.method().clone());
 			log.path = req.uri().path_and_query().map(ToString::to_string);
 			log.version = Some(req.version());
-			return Err(ProxyError::SubstrateEgressDenied(
-				"actor egress policy denied TLS destination".to_owned(),
-			))
-			.snapshot_on_err(log, &mut req);
+			// The port the actor dialed: the request's URI rarely names one.
+			let port = req
+				.extensions()
+				.get::<cel::DestinationContext>()
+				.map(|destination| destination.port)
+				.or(log.server_port)
+				.unwrap_or(443);
+			// The SNI is what the policy refused; the request is not normalized yet,
+			// so its URI names no host.
+			let sni = log
+				.tls_info
+				.as_ref()
+				.and_then(|tls| tls.server_name.clone())
+				.or_else(|| log.host.clone())
+				.unwrap_or_default();
+			return Err(destination_denied("https", &sni, port)).snapshot_on_err(log, &mut req);
 		}
 
 		let selected_listener = self.selected_listener.clone();

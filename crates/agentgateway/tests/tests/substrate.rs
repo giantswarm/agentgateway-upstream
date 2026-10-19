@@ -1648,7 +1648,8 @@ async fn substrate_egress_connect_status_at(
 	if response.starts_with("HTTP/1.1 200 OK\r\n") {
 		io.write_all(payload).await.unwrap();
 		StatusCode::OK
-	} else if response.starts_with("HTTP/1.1 403 Forbidden\r\n") {
+	} else if response.starts_with("HTTP/1.1 403 ") {
+		// A Substrate egress denial carries its message as the reason phrase.
 		StatusCode::FORBIDDEN
 	} else if response.starts_with("HTTP/1.1 503 Service Unavailable\r\n") {
 		StatusCode::SERVICE_UNAVAILABLE
@@ -2285,7 +2286,7 @@ async fn substrate_egress_selects_tls_from_policy_and_rechecks_http(
 	let expected = if allowed_request {
 		"HTTP/1.1 200 OK"
 	} else {
-		"HTTP/1.1 403 Forbidden"
+		"HTTP/1.1 403 actor egress policy denied https to "
 	};
 	assert!(
 		String::from_utf8_lossy(&response).starts_with(expected),
@@ -2420,7 +2421,7 @@ async fn substrate_egress_denies_http_upgrades_without_dialing(
 		.await
 		.expect("timed out waiting for HTTP response");
 		let expected = if upgrading {
-			"HTTP/1.1 403 Forbidden\r\n"
+			"HTTP/1.1 403 "
 		} else {
 			"HTTP/1.1 200 OK\r\n"
 		};

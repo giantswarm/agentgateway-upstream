@@ -526,15 +526,34 @@ fn matching_rule<'a>(
 		EgressRequestProtocol::Http => MatchPhase::HttpRequest,
 		EgressRequestProtocol::Https => MatchPhase::HttpsRequest,
 	};
-	matching_destination_rule(
-		policy,
-		destination.hostname.as_deref().unwrap_or_default(),
-		destination.port,
-		phase,
-	)
-	.ok_or_else(|| {
-		ProxyError::SubstrateEgressDenied("actor egress policy denied destination".to_owned()).into()
+	let hostname = destination.hostname.as_deref().unwrap_or_default();
+	matching_destination_rule(policy, hostname, destination.port, phase).ok_or_else(|| {
+		let scheme = match protocol {
+			EgressRequestProtocol::Http => "http",
+			EgressRequestProtocol::Https => "https",
+		};
+		destination_denied(scheme, hostname, destination.port).into()
 	})
+}
+
+/// The denial of a destination the actor's egress policy does not allow. It
+/// names the destination and where it is allowed: the actor named the
+/// destination itself, so the body tells it nothing new, and the people who
+/// use and write the agent can only fix what its answer tells them.
+pub(crate) fn destination_denied(scheme: &str, host: &str, port: u16) -> ProxyError {
+	let host = ::http::uri::Authority::from_str(host)
+		.map(|authority| authority.host().to_owned())
+		.unwrap_or_default();
+	if host.is_empty() {
+		return ProxyError::SubstrateEgressDenied(format!(
+			"actor egress policy denied an {scheme} request that names no host"
+		));
+	}
+	// Authority::host keeps an IPv6 literal's brackets.
+	ProxyError::SubstrateEgressDenied(format!(
+		"actor egress policy denied {scheme} to {host}:{port}: it is not in this agent's egress policy; \
+		 the agent's author can allow it in the agent's egress settings"
+	))
 }
 
 fn matching_destination_rule<'a>(
@@ -683,6 +702,50 @@ mod tests {
 			all: None,
 			numbers: numbers.to_vec(),
 		})
+	}
+
+	fn denial_message(result: Result<&protos::ateapi::EgressRule, ProxyResponse>) -> String {
+		match result {
+			Err(ProxyResponse::Error(error)) => error.to_string(),
+			Err(_) => panic!("expected a ProxyError denial"),
+			Ok(_) => panic!("expected a denial"),
+		}
+	}
+
+	#[test]
+	fn a_denial_names_the_destination_and_where_it_is_allowed() {
+		let policy = protos::ateapi::EgressPolicy {
+			rules: vec![rule(
+				EgressRequestProtocol::Https,
+				&["api.example.com"],
+				None,
+			)],
+			..Default::default()
+		};
+		assert_eq!(
+			denial_message(matching_rule(
+				&policy,
+				&request(EgressRequestProtocol::Https, "evil.example", 443)
+			)),
+			"actor egress policy denied https to evil.example:443: it is not in this agent's egress \
+			 policy; the agent's author can allow it in the agent's egress settings"
+		);
+		assert_eq!(
+			denial_message(matching_rule(
+				&policy,
+				&request(EgressRequestProtocol::Http, "api.example.com", 8080)
+			)),
+			"actor egress policy denied http to api.example.com:8080: it is not in this agent's egress \
+			 policy; the agent's author can allow it in the agent's egress settings"
+		);
+		for (host, want) in [
+			("example.org:443", "https to example.org:443:"),
+			("[2001:db8::1]", "https to [2001:db8::1]:443:"),
+			("", "an https request that names no host"),
+		] {
+			let message = destination_denied("https", host, 443).to_string();
+			assert!(message.contains(want), "{host:?}: {message}");
+		}
 	}
 
 	#[test]
