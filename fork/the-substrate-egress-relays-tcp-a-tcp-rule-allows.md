@@ -1,3 +1,17 @@
+---
+id: the-substrate-egress-relays-tcp-a-tcp-rule-allows
+fork: agentgateway
+theme: egress-policies
+category: feature
+status: carried
+upstream:
+  outcome: to-file
+  refs: []
+  exit: file as a PR after the Substrate API's tcp rule is filed upstream
+depends_on: [giantswarm/substrate#164]
+commit: ""
+verified: 2026-10-19
+---
 # The Substrate egress relays TCP a tcp rule allows
 
 - **Status:** carried
