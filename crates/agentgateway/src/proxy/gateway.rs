@@ -747,8 +747,14 @@ impl Gateway {
 						Some(authority) => authority.clone(),
 						None => return Ok(ProxyError::InvalidRequest.into_response_with_grpc(false)),
 					};
-					// Only an address the actor named is one a tcp rule may decide on.
-					let connect_to_address = authority.parse::<SocketAddr>().is_ok();
+					// Only an address the actor named is one a tcp rule may decide on;
+					// the address the CONNECT arrived on is the gateway's own.
+					let connect_to_address = authority
+						.as_str()
+						.parse::<SocketAddr>()
+						.ok()
+						.and(connection.get::<TCPConnectionInfo>())
+						.map(|tcp| tcp.local_addr.ip());
 					let (target_address, bind) = {
 						let binds = inputs.stores.read_binds();
 						if let Ok(addr) = authority.as_str().parse::<SocketAddr>() {
@@ -826,10 +832,13 @@ impl Gateway {
 						let mut downstream = Socket::from_upgraded(connection, target_address, downstream);
 						if let Some(identity) = actor_identity {
 							downstream.ext_mut().insert(identity);
-							if connect_to_address {
+							if let Some(gateway) = connect_to_address {
 								downstream
 									.ext_mut()
-									.insert(substrate::EgressConnectAddress(target_address));
+									.insert(substrate::EgressConnectAddress {
+										target: target_address,
+										gateway,
+									});
 							}
 						}
 						if let Some(policy) = substrate_egress_actor_resolution {
