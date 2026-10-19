@@ -10,4 +10,4 @@ Fork infrastructure: this file, the README pointer, `CODEOWNERS`, `.circleci/con
 
 ## Reason
 
-the line's CI, publishing and sync
+the line's CI, publishing and sync. Three commit pairs on the branch cancel each other and replay at every re-pin: `6fd54c3b`/`69d08be0` (#17, reverted by #36), `af76adcf`/`3e7ce01b` (#44, reverted by #47) and `8c6f5049`/`1184ee60` (a throwaway private link and its removal)
