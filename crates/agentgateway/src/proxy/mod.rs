@@ -504,6 +504,7 @@ impl ProxyError {
 
 	pub fn into_response_with_grpc(self, is_grpc_request: bool) -> Response {
 		let msg = self.to_string();
+		let egress_denied = matches!(self, ProxyError::SubstrateEgressDenied(_));
 		let code = self.http_status();
 		let this = match self {
 			ProxyError::RemoteRateLimitExceeded {
@@ -625,6 +626,11 @@ impl ProxyError {
 				.unwrap();
 		}
 
+		// An HTTP/1.1 egress denial carries its message as the reason phrase too:
+		// many clients an agent runs print the status line and drop the body.
+		if egress_denied && let Ok(reason) = hyper::ext::ReasonPhrase::try_from(msg.clone()) {
+			rb = rb.extension(reason);
+		}
 		rb.header(hyper::header::CONTENT_TYPE, "text/plain")
 			.body(http::Body::from(msg))
 			.unwrap()
@@ -797,6 +803,28 @@ pub fn resolve_simple_backend_with_policies(
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[test]
+	fn an_egress_denial_carries_its_message_as_the_reason_phrase() {
+		let message = "actor egress policy denied https to example.org:443: it is not in this agent's egress policy";
+		let response =
+			ProxyError::SubstrateEgressDenied(message.to_owned()).into_response_with_grpc(false);
+		assert_eq!(response.status(), StatusCode::FORBIDDEN);
+		assert_eq!(
+			response
+				.extensions()
+				.get::<hyper::ext::ReasonPhrase>()
+				.map(|reason| reason.as_bytes()),
+			Some(message.as_bytes())
+		);
+		let other = ProxyError::AuthorizationFailed.into_response_with_grpc(false);
+		assert!(
+			other
+				.extensions()
+				.get::<hyper::ext::ReasonPhrase>()
+				.is_none()
+		);
+	}
 
 	#[test]
 	fn grpc_status_follows_the_gateway_grpc_mapping() {
