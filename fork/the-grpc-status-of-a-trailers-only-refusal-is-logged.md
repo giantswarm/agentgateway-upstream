@@ -1,7 +1,7 @@
 # The gRPC status of a trailers-only refusal is logged
 
 - **Status:** carried
-- **Upstream:** filed as [agentgateway#3873](https://github.com/agentgateway/agentgateway/pull/3873) (open, 2026-10-13; `proxy/httpproxy.rs` and `telemetry/log.rs`). Not in #3873 and not filed: the same gap on the request limit refusal (`RequestLimitExceeded` in `proxy/gateway.rs`, answered outside `resolve_response`). Upstream `main` @ `c0354ea4` still sets `grpc.status` from an upstream's headers and trailers only. Drops at the re-pin onto a commit containing #3873
+- **Upstream:** merged as [agentgateway#3873](https://github.com/agentgateway/agentgateway/pull/3873) (`1370236e`, merged 2026-10-13 by howardjohn; `proxy/httpproxy.rs` and `telemetry/log.rs`). Not in #3873 and not filed: the same gap on the request limit refusal (`RequestLimitExceeded` in `proxy/gateway.rs`, answered outside `resolve_response`). Drops at the re-pin onto a commit containing `1370236e`
 - **Our commit:** the `fix(proxy): log the gRPC status of a refusal answered trailers-only` commit
 
 ## Change

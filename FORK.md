@@ -79,7 +79,7 @@ Why the fork carries it, and when it drops.
 
 A value that is not known is written as unknown, never guessed.
 
-Thirteen carried changes sit on the pin, each with a ledger file in `fork/`, beside the file for the fork infrastructure (the Kubernetes JWKS refetch is four commits, offered upstream as one). Ten change agentgateway's behaviour: the admission of a resuming
+Nineteen carried changes sit on the pin, each with a ledger file in `fork/`, beside the file for the fork infrastructure (the Kubernetes JWKS refetch is four commits, offered upstream as one). Ten change agentgateway's behaviour: the admission of a resuming
 actor, the file resources read from disk on every reload together with the parse-time files made managed dependencies,
 the resume refusal answered at once (#29, which leaves with Substrate's directive), the unreachable policy service
 answered as unavailable (#35), a credential provider's failure answered by its class (#39), the credential header applied by request path prefix,
@@ -87,10 +87,10 @@ the JWKS refetch on an unknown key id for local configuration (agentgateway#3037
 Checked against upstream `main` @ `c0354ea4` on 2026-10-13, they fall in four groups. Already upstream after the pin, so they drop at the re-pin onto a commit
 containing all three: the parse-time files (agentgateway#3863, `0a8476fe`) with the read on every reload, a workaround that leaves with it, the
 unreachable policy service (agentgateway#3793, `0c62b5a3`) and the admission of a resuming actor (agentgateway#3882, `9d36620d`). Filed or to file:
-the gRPC status in the access log (agentgateway#3873, open; the request limit refusal not filed), the credential provider's failure class
+the gRPC status in the access log (agentgateway#3873, merged 2026-10-13 as `1370236e`, so it drops at the re-pin too; the request limit refusal not filed), the credential provider's failure class
 (agentgateway#3875, draft, held on Substrate's credential provider contract) and the credential header by path prefix (after agent-substrate/substrate#2515).
 Waiting on others: the JWKS refetch for local configuration (agentgateway#3037), and under Kubernetes an issue that is not filed yet. Not for upstream as is: the
-resume refusal answered at once, whose directive only Substrate 1.3 still sends and whose proper fix is Substrate's codes. The grpc pin at v1.83.2, the Go 1.27.2 build (its `x/net` v0.60.0 half is upstream) and the `x/net` v0.61.0 requirement change versions only and leave when upstream requires fixed releases (see their files in `fork/`).
+resume refusal answered at once, whose directive Substrate 1.3 and, since giantswarm/substrate#445, the line's ate-api send, and whose proper fix is Substrate's codes. The grpc pin at v1.83.2, the Go 1.27.2 build (its `x/net` v0.60.0 half is upstream) and the `x/net` v0.61.0 requirement change versions only and leave when upstream requires fixed releases (see their files in `fork/`).
 
 Dropped at the 2026-10-05 re-pin because the pin contains their fixes: the `GRPCRoute` method-match translation (`223b80e2`, pull request #6;
 agentgateway#3723 `2353a2c1`, merged 2026-10-01, closes our agentgateway#3715 and makes a service-only match
