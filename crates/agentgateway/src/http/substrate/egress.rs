@@ -2477,9 +2477,10 @@ mod tests {
 		};
 		for ip in &gateway {
 			let address = SocketAddr::new(*ip, 15000);
-			let allowed =
-				tcp_rule_allows(&policy, address, &gateway, |_| async { Box::<[IpAddr]>::default() })
-					.await;
+			let allowed = tcp_rule_allows(&policy, address, &gateway, |_| async {
+				Box::<[IpAddr]>::default()
+			})
+			.await;
 			assert!(!allowed, "{address}");
 		}
 	}
