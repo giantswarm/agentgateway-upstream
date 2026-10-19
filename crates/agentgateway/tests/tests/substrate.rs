@@ -2296,6 +2296,23 @@ async fn substrate_egress_selects_tls_from_policy_and_rechecks_http(
 		upstream.received_requests().await.unwrap().len(),
 		usize::from(allowed_request)
 	);
+	assert_eq!(
+		refusals(&gateway, "https", "127.0.0.1", port),
+		(!allowed_request).then_some(1)
+	);
+}
+
+/// The refusals the gateway counted for the tunnel's actor and one destination.
+fn refusals(gateway: &TestBind, scheme: &'static str, host: &str, port: u16) -> Option<u64> {
+	gateway.inputs().metrics.substrate_egress_refusals.count(
+		&agentgateway::telemetry::metrics::EgressRefusalLabels {
+			ate_atespace: "demo".to_owned(),
+			ate_actor_name: "my-actor".to_owned(),
+			scheme,
+			host: host.to_owned(),
+			port,
+		},
+	)
 }
 
 #[cfg(feature = "crypto-aws-lc")]
@@ -2761,6 +2778,10 @@ async fn substrate_egress_rejects_unrecognized_or_unauthorized_connections(
 		.unwrap();
 		assert!(result.is_err(), "unauthorized TLS handshake succeeded");
 	}
+	assert_eq!(
+		refusals(&gateway, "https", "denied.example", port),
+		(kind == "missing-https-listener").then_some(1)
+	);
 	assert!(upstream.received_requests().await.unwrap().is_empty());
 	assert!(
 		tokio::time::timeout(Duration::from_millis(50), raw_upstream.accept())
