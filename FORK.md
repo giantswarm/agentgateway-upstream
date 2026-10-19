@@ -62,11 +62,22 @@ Everything on `giantswarm` that is not in the pin (`git log main..giantswarm`, t
 A ledger file `fork/<slug>.md` is:
 
 ```markdown
+---
+id: <slug>
+fork: agentgateway
+theme: <one of the shared theme slugs>
+category: pin | infra | bugfix | feature | gs-specific | compat | test
+status: carried | dropped | superseded
+commits:
+  - '<the exact subject of each carried commit, without its " (#N)" suffix>'
+upstream:
+  outcome: merged | open | declined | superseded | to-file | fork-only | drops-at-repin | none
+  refs: [<every upstream and fork item as owner/repo#N>]
+  exit: '<what makes the change leave the fork>'
+depends_on: [<ledger files of this line, owner/repo:<slug> of another line, owner/repo#N items>]
+verified: <YYYY-MM-DD, the date the upstream state was last checked>
+---
 # <Title: what the change does, as a sentence>
-
-- **Status:** carried | dropped
-- **Upstream:** the upstream pull request, issue or branch, or why the change is not for upstream
-- **Our commit:** the commit on `giantswarm` and the pull request or issue it came from
 
 ## Change
 
@@ -74,14 +85,18 @@ What the change does: the files and symbols it touches.
 
 ## Reason
 
-Why the fork carries it, and when it drops.
+Why the fork carries it.
+
+## History
+
+What happened to the change upstream and on the branch, as prose: the pull requests, the re-pins it survived, the dates.
 ```
 
 A value that is not known is written as unknown, never guessed.
 
-Every ledger file opens with a YAML front-matter that a generator reads (the prose below it is for people): `id` (the file name), `fork` (`agentgateway`), `theme` (one of the shared theme slugs, `session-lifecycle` to `never-filed`), `category` (`pin`, `infra`, `bugfix`, `feature`, `gs-specific`, `compat` or `test`), `status`, `upstream.outcome` (`merged`, `open`, `declined`, `superseded`, `to-file`, `fork-only`, `drops-at-repin` or `none`), `upstream.refs` (every upstream and fork item as `owner/repo#N`), `upstream.exit` (what makes the change leave the fork), `depends_on` (ledger files of this or another line, `owner/repo:<slug>` for another line, or an `owner/repo#N` item), `commit` and `verified` (the date the upstream state was last checked). `.github/scripts/ledger-header.sh agentgateway fork` checks every header and runs in the `public-links` job of every pull request (the same rules as `fork-ledger validate`); `fork-ledger header` seeds one from the prose. Proposal and vocabulary: giantswarm/kagent-upstream#719.
+The front-matter is the ledger's single source of a change's state; the prose under it is for people and repeats none of it. `commits` names the carried commits by subject, not SHA: a re-pin rewrites every SHA and keeps every subject. `.github/scripts/ledger-header.sh --complete agentgateway fork` runs in the `public-links` job of every pull request and on every push (the same rules as `fork-ledger validate --complete`): every header is well-formed, no subject is named by two files, and every non-merge commit between the pin (`origin/main`) and the branch head is named by exactly one file unless a prefix in `fork/EXEMPT` covers it (ledger edits, re-pin tooling, bots, `amend!`/`fixup!` the next re-pin folds). A carried change that gains a follow-up fix adds the fix's subject to its `commits`; a pull request whose commit no file names does not pass. `fork-ledger header` (giantswarm/fork-ledger) seeded the headers from the first-generation bullets and keeps them complete; the themes and the vocabulary are giantswarm/kagent-upstream#719.
 
-Nineteen carried changes sit on the pin, each with a ledger file in `fork/`, beside the file for the fork infrastructure (the Kubernetes JWKS refetch is four commits, offered upstream as one). Ten change agentgateway's behaviour: the admission of a resuming
+Twenty carried changes sit on the pin, each with a ledger file in `fork/`, beside the file for the fork infrastructure (the Kubernetes JWKS refetch is four commits, offered upstream as one). Ten change agentgateway's behaviour: the admission of a resuming
 actor, the file resources read from disk on every reload together with the parse-time files made managed dependencies,
 the resume refusal answered at once (#29, which leaves with Substrate's directive), the unreachable policy service
 answered as unavailable (#35), a credential provider's failure answered by its class (#39), the credential header applied by request path prefix,
@@ -141,7 +156,7 @@ itself (`git rebase` drops already-applied patches), and its file in `fork/` is 
    `giantswarm` whose head has not passed `ci-ok`, for every actor, so nobody updates the line by hand.
 4. Update this file (the pin) and the ledger files in `fork/` (a dropped patch is marked `dropped` or deleted) and the upstream-pin annotation in `.circleci/config.yml`
    (`index:io.giantswarm.upstream.version=<pin>`, stamped on every published index) in a pull request, and the
-   `Upstream` field of every ledger file the new pin changes.
+   `upstream` block (`outcome`, `refs`, `exit`) and `commits` of every ledger file the new pin changes, and `## History` says what the re-pin did.
 5. Tag a release (`vX.Y.Z` — a re-pin is at least a minor bump, see "Publishing"), move the consumers to it (see
    "Consumers"), prove it in agentlab — for a move the
    Substrate line depends on, the release is cut once `ci-ok` is green on the exact head (the Substrate chart's

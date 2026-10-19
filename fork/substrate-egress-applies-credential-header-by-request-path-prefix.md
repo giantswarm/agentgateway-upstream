@@ -4,19 +4,16 @@ fork: agentgateway
 theme: credential-injection
 category: feature
 status: carried
+commits:
+  - 'fix(substrate): apply a credential header by its request path prefix'
 upstream:
   outcome: to-file
   refs: [agent-substrate/substrate#2515, agent-substrate/substrate#2541, agentgateway/agentgateway#3985]
   exit: 'file only after as#2541 is answered and as#2515 lands; rebase on #3985'
 depends_on: [agent-substrate/substrate#2541, giantswarm/substrate:egress-scopes-credential-header-to-request-path-prefix]
-commit: giantswarm/agentgateway-upstream#65
 verified: 2026-10-19
 ---
 # The Substrate egress applies a credential header by its request path prefix
-
-- **Status:** carried
-- **Upstream:** to file — prepared in the fork: branch [`upstream/substrate-egress-path-prefix`](https://github.com/giantswarm/agentgateway-upstream/tree/upstream/substrate-egress-path-prefix) on upstream `main` @ `50067185`. It follows [agent-substrate/substrate#2515](https://github.com/agent-substrate/substrate/pull/2515) (open), which adds the field to Substrate's API.
-- **Our commit:** the `fix(substrate): apply a credential header by its request path prefix` commit on `giantswarm`, a `cherry-pick -x` of the upstream branch's commit (`substrate: …` upstream), from [#65](https://github.com/giantswarm/agentgateway-upstream/pull/65) ([#62](https://github.com/giantswarm/agentgateway-upstream/issues/62))
 
 ## Change
 
@@ -27,3 +24,9 @@ verified: 2026-10-19
 The Substrate line carries `path_prefix` (giantswarm/substrate#349, for giantswarm/substrate#344): one host takes `Basic` for Git over HTTPS and `Bearer` for its REST API under `/api/`. Without this change the egress applied every entry for a header, the last one winning on every path, so a path-scoped credential reached every path of the host and the Substrate line's agentgateway e2e failed `TestActorEgressCredentialInjection`.
 
 Drops at the re-pin onto an upstream commit that contains the upstream change.
+
+## History
+
+to file — prepared in the fork: branch [`upstream/substrate-egress-path-prefix`](https://github.com/giantswarm/agentgateway-upstream/tree/upstream/substrate-egress-path-prefix) on upstream `main` @ `50067185`. It follows [agent-substrate/substrate#2515](https://github.com/agent-substrate/substrate/pull/2515) (open), which adds the field to Substrate's API.
+
+the `fix(substrate): apply a credential header by its request path prefix` commit on `giantswarm`, a `cherry-pick -x` of the upstream branch's commit (`substrate: …` upstream), from [#65](https://github.com/giantswarm/agentgateway-upstream/pull/65) ([#62](https://github.com/giantswarm/agentgateway-upstream/issues/62))
