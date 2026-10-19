@@ -1738,11 +1738,16 @@ async fn substrate_egress_replaces_only_requested_credentials(
 		(simple_mock().await, vec![])
 	};
 	let port = upstream.address().port();
+	// GitLab addresses a project by its encoded path: the origin must see `%2F` and `%252F` as sent,
+	// and the credential scoped to the path prefix above it still applies.
+	let path_prefix = format!("/substrate-egress-credentials-{https}-{placeholder}/projects/");
+	let path = format!("{path_prefix}group%2Fproject/files/a%252Fb");
 	let effects = Some(protos::ateapi::HttpRuleEffects {
 		replace_headers: vec![protos::ateapi::CredentialHeader {
 			header: "authorization".to_owned(),
 			prefix: "Bearer ".to_owned(),
 			credential_uri: "ate-secret://kubernetes.io/default/upstream-token".to_owned(),
+			path_prefix,
 			..Default::default()
 		}],
 	});
@@ -1871,7 +1876,6 @@ async fn substrate_egress_replaces_only_requested_credentials(
 
 	let io = open_actor_egress_tunnel(&gateway, port).await;
 
-	let path = format!("/substrate-egress-credentials-{https}-{placeholder}");
 	let authorization = if placeholder {
 		"AuThOrIzAtIoN: Bearer actor-supplied\r\n"
 	} else {
@@ -1924,6 +1928,7 @@ async fn substrate_egress_replaces_only_requested_credentials(
 	);
 	let upstream_requests = upstream.received_requests().await.unwrap();
 	assert_eq!(upstream_requests.len(), 1);
+	assert_eq!(upstream_requests[0].url.path(), path);
 	assert_eq!(
 		upstream_requests[0]
 			.headers

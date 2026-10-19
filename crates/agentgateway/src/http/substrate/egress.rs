@@ -297,8 +297,10 @@ fn path_prefix_matches(prefix: &str, path: &str) -> bool {
 }
 
 /// Whether an absolute path reads the same to every origin. Prefixes compare byte for byte, so a
-/// path with a dot or empty segment, a backslash, or a percent-encoded '.', '/' or '\' could resolve
-/// outside a prefix it starts with; such a path is not canonical.
+/// path with a dot or empty segment, a backslash, or a percent-encoded '.' or '\' could resolve
+/// outside a prefix it starts with; such a path is not canonical. A percent-encoded '/' names one
+/// segment to most origins (GitLab's `projects/<group>%2F<project>`) and a separator to some, so a
+/// path carrying one is canonical only if it has no dot or empty segment read either way.
 fn canonical_path(path: &str) -> bool {
 	let Some(rest) = path.strip_prefix('/') else {
 		return false;
@@ -309,14 +311,12 @@ fn canonical_path(path: &str) -> bool {
 	{
 		return false;
 	}
-	let lower = path.to_ascii_lowercase();
-	if ["%2e", "%2f", "%5c"]
-		.iter()
-		.any(|encoded| lower.contains(encoded))
-	{
+	let lower = rest.to_ascii_lowercase();
+	if ["%2e", "%5c"].iter().any(|encoded| lower.contains(encoded)) {
 		return false;
 	}
-	let mut segments = rest.split('/').peekable();
+	let decoded = lower.replace("%2f", "/");
+	let mut segments = decoded.split('/').peekable();
 	while let Some(segment) = segments.next() {
 		if segment.is_empty() && segments.peek().is_some() {
 			return false;
@@ -1143,6 +1143,10 @@ mod tests {
 			"/backend-api/codex//other",
 			"/backend-api/codex/..;/..;/other",
 			"/backend-api/codex/..;x=1/other",
+			"/backend-api/codex/a%2f..%2f..%2fother",
+			"/backend-api/codex/a%2F.%2Fother",
+			"/backend-api/codex/a%2F%2Fother",
+			"/backend-api/codex/a%2F..;x=1%2Fother",
 			r"/backend-api/codex/..\..\other",
 			"/backend-api/codex/..%5c..%5cother",
 			"/backend-api/codex/..%5C..%5Cother",
@@ -1161,6 +1165,36 @@ mod tests {
 			assert_eq!(
 				chosen[0].credential_uri, "ate-secret://p/host",
 				"replace_headers_for(with_host, {target:?})"
+			);
+		}
+	}
+
+	#[test]
+	fn replace_headers_apply_a_prefix_to_an_encoded_slash_under_it() {
+		let api = protos::ateapi::CredentialHeader {
+			header: "authorization".to_owned(),
+			prefix: "Bearer ".to_owned(),
+			credential_uri: "ate-secret://p/gitlab-api".to_owned(),
+			path_prefix: "/api/v4/".to_owned(),
+			..Default::default()
+		};
+		let scoped = [api];
+		// GitLab addresses a project, a file and a branch by its URL-encoded path.
+		for path in [
+			"/api/v4/projects/workspaces%2Fworkspace-proof",
+			"/api/v4/projects/workspaces%2fworkspace-proof/merge_requests",
+			"/api/v4/projects/group%2Fsub%2Fproject/repository/files/docs%2FREADME.md/raw",
+			"/api/v4/projects/group%2Fproject/repository/branches/feature%252Fx",
+		] {
+			let chosen = replace_headers_for(&scoped, path);
+			assert_eq!(chosen.len(), 1, "replace_headers_for(scoped, {path:?})");
+			assert_eq!(chosen[0].credential_uri, "ate-secret://p/gitlab-api");
+		}
+		// An encoded slash never moves a path under a prefix it is not under as written.
+		for path in ["/api%2Fv4/projects", "/api/v4%2Fprojects", "/api%2fv4/user"] {
+			assert!(
+				replace_headers_for(&scoped, path).is_empty(),
+				"replace_headers_for(scoped, {path:?}) applies the scoped entry"
 			);
 		}
 	}
