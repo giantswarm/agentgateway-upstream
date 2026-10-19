@@ -6,6 +6,7 @@ category: feature
 status: carried
 commits:
   - 'feat(substrate): the egress counts refusals per actor and destination'
+  - 'docs(substrate): the metrics schema lists the egress refusal counter'
 upstream:
   outcome: to-file
   refs: []
@@ -35,4 +36,4 @@ refused. The actor in the series is what lets a refusal be shown on the Session 
 
 ## History
 
-Upstream: to file — prepared in the fork: branch `upstream/egress-refusals-per-actor`.
+Upstream: to file — prepared in the fork: branch `upstream/egress-refusals-per-actor-v2`.
