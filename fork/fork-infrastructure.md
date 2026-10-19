@@ -1,3 +1,17 @@
+---
+id: fork-infrastructure
+fork: agentgateway
+theme: ci-publish-infra
+category: infra
+status: carried
+upstream:
+  outcome: fork-only
+  refs: []
+  exit: 'keep; delete the 3 net-zero commit pairs (#17/#36, #44/#47, 8c6f5049/1184ee60) at the next re-pin'
+depends_on: []
+commit: ""
+verified: 2026-10-19
+---
 # Fork infrastructure
 
 - **Status:** carried

@@ -1,3 +1,17 @@
+---
+id: a-substrate-policy-call-that-never-reached-its-service-reads-as-unavailability
+fork: agentgateway
+theme: credential-injection
+category: bugfix
+status: carried
+upstream:
+  outcome: merged
+  refs: [agentgateway/agentgateway#3752, agentgateway/agentgateway#3793]
+  exit: drops at re-pin; 500-mapped local errors (ServiceNotFound) still read as Unknown, later PR
+depends_on: []
+commit: 2f1ea6dc
+verified: 2026-10-19
+---
 # A Substrate policy call that never reached its service reads as unavailability
 
 - **Status:** carried

@@ -1,3 +1,17 @@
+---
+id: a-resume-refusal-marked-not-resumable-is-answered-at-once
+fork: agentgateway
+theme: session-lifecycle
+category: gs-specific
+status: carried
+upstream:
+  outcome: fork-only
+  refs: [agent-substrate/substrate#1562, agent-substrate/substrate#2105, agentgateway/agentgateway#3674, giantswarm/agentgateway-upstream#86, giantswarm/substrate#445, giantswarm/substrate#80]
+  exit: Substrate error-code contract upstream (post draft D on as#1562) or drop the directive
+depends_on: [giantswarm/substrate:ateapi-crashed-actor-refusal-not-resumable]
+commit: 5e124eb3
+verified: 2026-10-19
+---
 # A resume refusal marked not resumable is answered at once
 
 - **Status:** carried
