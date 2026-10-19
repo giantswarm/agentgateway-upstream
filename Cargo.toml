@@ -142,6 +142,7 @@ itertools = "0.15"
 jsonwebtoken = { version = "11" }
 lazy_static = "1.5"
 libc = "0.2"
+nix = { version = "0.31", default-features = false }
 notify = "8.2"
 notify-debouncer-full = "0.7"
 md-5 = "0.11"

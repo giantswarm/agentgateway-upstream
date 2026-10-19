@@ -483,10 +483,20 @@ impl Gateway {
 				const AUTO_PROTOCOL_PEEK_LEN: usize = 8;
 				let def = frontend::TLS::default();
 				let to = policies.tls.as_ref().unwrap_or(&def).handshake_timeout;
+				// An actor's tunnel that sends no TLS or HTTP before the timeout, or
+				// closes first, is raw TCP to its CONNECT address (a server-first
+				// protocol, a connect-only probe): its tcp rules decide on it.
+				let actor_egress = raw_stream.ext::<ActorIdentity>().is_some();
 				let (ext, metrics, inner) = raw_stream.into_parts();
 				let mut rewind = Socket::new_rewind(inner);
 				let mut buf = [0u8; AUTO_PROTOCOL_PEEK_LEN];
 				match tokio::time::timeout(to, peek_auto_protocol(&mut rewind, &mut buf)).await {
+					Err(_) | Ok(Ok(0)) if actor_egress => {
+						debug!(bind=%bind_name, "actor egress sent no bytes, treating as tcp");
+						rewind.rewind();
+						let stream = Socket::from_rewind(ext, metrics, rewind);
+						Self::proxy_tcp(bind_name, inputs, None, stream, drain).await
+					},
 					Err(_) => {
 						debug!(bind=%bind_name, "auto protocol detection timed out");
 					},
@@ -746,6 +756,13 @@ impl Gateway {
 						Some(authority) => authority.as_str(),
 						None => return Ok(ProxyError::InvalidRequest.into_response_with_grpc(false)),
 					};
+					// Only an address the actor named is one a tcp rule may decide on;
+					// the address the CONNECT arrived on is the gateway's own.
+					let connect_to_address = authority
+						.parse::<SocketAddr>()
+						.ok()
+						.and(connection.get::<TCPConnectionInfo>())
+						.map(|tcp| tcp.local_addr.ip());
 					let (target_address, bind) = {
 						let binds = inputs.stores.read_binds();
 						if let Ok(addr) = authority.parse::<SocketAddr>() {
@@ -823,6 +840,14 @@ impl Gateway {
 						let mut downstream = Socket::from_upgraded(connection, target_address, downstream);
 						if let Some(identity) = actor_identity {
 							downstream.ext_mut().insert(identity);
+							if let Some(gateway) = connect_to_address {
+								downstream
+									.ext_mut()
+									.insert(substrate::EgressConnectAddress {
+										target: target_address,
+										gateway,
+									});
+							}
 						}
 						if let Some(policy) = substrate_egress_actor_resolution {
 							downstream.ext_mut().insert(policy);
@@ -1099,11 +1124,22 @@ impl Gateway {
 		mut stream: Socket,
 		_drain: DrainWatcher,
 	) {
-		if stream.ext::<ActorIdentity>().is_some()
-			&& stream.ext::<EgressTlsMode>() != Some(&EgressTlsMode::Passthrough)
-		{
-			debug!(bind=%bind_name, "actor egress denied unsupported protocol");
-			return;
+		if stream.ext::<ActorIdentity>().is_some() {
+			match stream.ext::<EgressTlsMode>() {
+				Some(EgressTlsMode::Passthrough) => {},
+				Some(_) => {
+					debug!(bind=%bind_name, "actor egress denied unsupported protocol");
+					return;
+				},
+				// Neither TLS nor HTTP: a tcp rule decides.
+				None => {
+					let client = super::httpproxy::PolicyClient::new(inputs.clone());
+					if let Err(error) = substrate::authorize_tcp(&client, stream.ext_mut()).await {
+						debug!(bind=%bind_name, %error, "actor tcp egress denied");
+						return;
+					}
+				},
+			}
 		}
 		let selected_listener = match selected_listener {
 			Some(l) => l,
