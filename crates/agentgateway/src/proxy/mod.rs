@@ -103,6 +103,7 @@ impl ProxyError {
 			ProxyError::AuthorizationFailed
 			| ProxyError::SubstrateEgressDenied(_)
 			| ProxyError::SubstrateEgressUpgradeDenied(_)
+			| ProxyError::SubstrateEgressDestinationDenied(_)
 			| ProxyError::CsrfValidationFailed => ProxyResponseReason::Authorization,
 			ProxyError::BackendAuthenticationFailed(http::auth::BackendAuthError::Local(_)) => {
 				ProxyResponseReason::Internal
@@ -324,6 +325,10 @@ pub enum ProxyError {
 	SubstrateEgressDenied(String),
 	#[error("{0}")]
 	SubstrateEgressUpgradeDenied(&'static str),
+	/// A destination outside the actor's egress policy. The message names only
+	/// what the actor itself dialed, so it is safe to show.
+	#[error("{0}")]
+	SubstrateEgressDestinationDenied(String),
 	#[error("{0}")]
 	SubstrateEgressUnavailable(String),
 	#[error("{0}")]
@@ -466,8 +471,11 @@ impl ProxyError {
 			ProxyError::AIResponse(_) => "failed to process LLM response",
 			ProxyError::SubstrateIngressFailed(..) => "ingress failed",
 			ProxyError::SubstrateIngressCapacityExhausted => "no worker has room for the actor",
+			// The control plane's refusal is addressed to the caller.
+			ProxyError::SubstrateResumeRefused(refusal) => return refusal.message.clone().into(),
 			ProxyError::SubstrateEgressDenied(_) => "actor egress policy denied",
 			ProxyError::SubstrateEgressUpgradeDenied(message) => return (*message).into(),
+			ProxyError::SubstrateEgressDestinationDenied(message) => return message.clone().into(),
 			ProxyError::SubstrateEgressUnavailable(_) => "service unavailable",
 			ProxyError::SubstrateEgressFailed(_) => "backend authentication failed",
 			ProxyError::RequestLimitExceeded => "request limit exceeded",
@@ -579,9 +587,9 @@ impl ProxyError {
 			ProxyError::APIKeyAuthenticationFailure(_) => StatusCode::UNAUTHORIZED,
 			ProxyError::McpJwtAuthenticationFailure(_, _) => StatusCode::UNAUTHORIZED,
 			ProxyError::AuthorizationFailed => StatusCode::FORBIDDEN,
-			ProxyError::SubstrateEgressDenied(_) | ProxyError::SubstrateEgressUpgradeDenied(_) => {
-				StatusCode::FORBIDDEN
-			},
+			ProxyError::SubstrateEgressDenied(_)
+			| ProxyError::SubstrateEgressUpgradeDenied(_)
+			| ProxyError::SubstrateEgressDestinationDenied(_) => StatusCode::FORBIDDEN,
 			ProxyError::SubstrateEgressUnavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
 			ProxyError::SubstrateEgressFailed(_) => StatusCode::BAD_GATEWAY,
 			ProxyError::ExternalAuthorizationFailed(status) => status.unwrap_or(StatusCode::FORBIDDEN),
@@ -676,6 +684,7 @@ impl ProxyError {
 			this => this,
 		};
 		let grpc_status = is_grpc_request.then(|| proxy_error_to_grpc_status(&this, code));
+		let destination_denied = matches!(this, ProxyError::SubstrateEgressDestinationDenied(_));
 		let mut rb = ::http::Response::builder().status(code);
 		if matches!(
 			&this,
@@ -783,6 +792,11 @@ impl ProxyError {
 				.unwrap();
 		}
 
+		// An HTTP/1.1 egress destination denial carries its message as the reason
+		// phrase too: many clients an agent runs print the status line and drop the body.
+		if destination_denied && let Ok(reason) = hyper::ext::ReasonPhrase::try_from(msg.to_string()) {
+			rb = rb.extension(reason);
+		}
 		rb.header(hyper::header::CONTENT_TYPE, "text/plain")
 			.body(http::Body::from(msg.into_owned()))
 			.unwrap()
@@ -999,6 +1013,28 @@ mod tests {
 			assert_eq!(status.code(), code, "{message}");
 			assert_eq!(status.message(), message);
 		}
+	}
+
+	#[test]
+	fn an_egress_destination_denial_carries_its_message_as_the_reason_phrase() {
+		let message = "actor egress policy denied https to example.org:443: it is not in this agent's egress policy";
+		let response = ProxyError::SubstrateEgressDestinationDenied(message.to_owned())
+			.into_response_with_grpc(false);
+		assert_eq!(response.status(), StatusCode::FORBIDDEN);
+		assert_eq!(
+			response
+				.extensions()
+				.get::<hyper::ext::ReasonPhrase>()
+				.map(|reason| reason.as_bytes()),
+			Some(message.as_bytes())
+		);
+		let other = ProxyError::AuthorizationFailed.into_response_with_grpc(false);
+		assert!(
+			other
+				.extensions()
+				.get::<hyper::ext::ReasonPhrase>()
+				.is_none()
+		);
 	}
 
 	#[test]
