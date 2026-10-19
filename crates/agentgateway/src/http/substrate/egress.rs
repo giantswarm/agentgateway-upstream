@@ -12,7 +12,7 @@ use crate::proxy::httpproxy::{DynamicBackendOverride, PolicyClient};
 use crate::proxy::{ProxyError, ProxyResponse};
 use crate::store::RequestPolicyTrait;
 use crate::telemetry::log::RequestLog;
-use crate::telemetry::metrics::{OutboundCallKind, OutboundCallSubtype};
+use crate::telemetry::metrics::{EgressRefusalLabels, OutboundCallKind, OutboundCallSubtype};
 use crate::transport::stream::{Extension, TCPConnectionInfo};
 use crate::types::agent::{SimpleBackendReferenceWithPolicies, Target};
 use crate::{cel, *};
@@ -26,6 +26,15 @@ const DEFAULT_ACTOR_JWT_CACHE_CAPACITY: usize = 8192;
 pub(crate) enum EgressRequestProtocol {
 	Http,
 	Https,
+}
+
+impl EgressRequestProtocol {
+	fn scheme(self) -> &'static str {
+		match self {
+			Self::Http => "http",
+			Self::Https => "https",
+		}
+	}
 }
 
 /// Retrieves and enforces the current Substrate egress policy for each request.
@@ -194,7 +203,19 @@ impl RequestPolicyTrait for SubstrateEgress {
 			);
 		}
 		let policy = fetch_policy(&self.target, client, &identity).await?;
-		let matched_rule = matching_rule(&policy, req)?;
+		let matched_rule = matching_rule(&policy, req).inspect_err(|_| {
+			if let Some(destination) = req.extensions().get::<cel::DestinationContext>()
+				&& let Some(protocol) = req.extensions().get::<EgressRequestProtocol>()
+			{
+				record_refusal(
+					client,
+					&identity,
+					protocol.scheme(),
+					destination.hostname.as_deref().unwrap_or_default(),
+					destination.port,
+				);
+			}
+		})?;
 		// Dynamic forwarding uses the authorized name and the original destination
 		// port. A port supplied in the HTTP authority must not change the dial target.
 		let destination = req
@@ -698,6 +719,10 @@ pub(crate) async fn authorize_tls(
 		.port();
 	let policy = fetch_policy(&policy.target, client, identity).await?;
 	let mode = tls_mode(&policy, sni, port)?;
+	if mode == EgressTlsMode::InterceptDenied {
+		let sni = sni.strip_suffix('.').unwrap_or(sni).to_ascii_lowercase();
+		record_refusal(client, identity, "https", &sni, port);
+	}
 	if mode == EgressTlsMode::Passthrough {
 		connection.insert(DynamicBackendOverride(Target::from((sni, port))));
 	}
@@ -770,6 +795,13 @@ pub(crate) async fn authorize_tcp(
 	})
 	.await
 	{
+		record_refusal(
+			client,
+			identity,
+			"tcp",
+			&address.ip().to_canonical().to_string(),
+			address.port(),
+		);
 		return Err(ProxyError::SubstrateEgressDenied(format!(
 			"actor egress policy denied tcp destination {address}: it is not in this agent's egress policy; \
 			 the agent's author can allow it in the agent's egress settings"
@@ -945,13 +977,45 @@ fn matching_rule<'a>(
 		EgressRequestProtocol::Https => MatchPhase::HttpsRequest,
 	};
 	let hostname = destination.hostname.as_deref().unwrap_or_default();
-	matching_destination_rule(policy, hostname, destination.port, phase).ok_or_else(|| {
-		let scheme = match protocol {
-			EgressRequestProtocol::Http => "http",
-			EgressRequestProtocol::Https => "https",
-		};
-		destination_denied(scheme, hostname, destination.port).into()
-	})
+	matching_destination_rule(policy, hostname, destination.port, phase)
+		.ok_or_else(|| destination_denied(protocol.scheme(), hostname, destination.port).into())
+}
+
+/// Counts a destination the actor's egress policy refused, so the refusal can
+/// be shown where the actor's Session or run is. A request that names no host
+/// is refused without a count: it has no destination to show.
+fn record_refusal(
+	client: &PolicyClient,
+	identity: &ActorIdentity,
+	scheme: &'static str,
+	host: &str,
+	port: u16,
+) {
+	let host = host
+		.strip_prefix('[')
+		.and_then(|host| host.strip_suffix(']'))
+		.unwrap_or(host);
+	if host.is_empty() {
+		return;
+	}
+	// The actor writes the host: a label carries only a name or an address.
+	let host = host.strip_suffix('.').unwrap_or(host).to_ascii_lowercase();
+	let host = if host.parse::<IpAddr>().is_ok() || valid_hostname(&host) {
+		host
+	} else {
+		"other".to_owned()
+	};
+	client
+		.inputs
+		.metrics
+		.substrate_egress_refusals
+		.record(EgressRefusalLabels {
+			ate_atespace: identity.atespace.clone(),
+			ate_actor_name: identity.actor_name.clone(),
+			scheme,
+			host,
+			port,
+		});
 }
 
 /// The denial of a destination the actor's egress policy does not allow. It
