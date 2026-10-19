@@ -6,6 +6,7 @@ category: feature
 status: carried
 commits:
   - 'feat(substrate): a policy denial names the destination and where it is allowed'
+  - 'test(substrate): a denial's status line carries its message'
 upstream:
   outcome: to-file
   refs: []
@@ -34,4 +35,4 @@ tell which host to declare. The actor named the destination itself, so the body 
 
 ## History
 
-Upstream: to file — prepared in the fork: branch `upstream/egress-denial-names-host`.
+Upstream: to file — prepared in the fork: branch `upstream/egress-denial-names-host-v2` (DCO signed off; `upstream/egress-denial-names-host` lacks the sign-off and is superseded).
