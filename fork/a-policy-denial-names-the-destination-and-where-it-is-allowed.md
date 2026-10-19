@@ -35,4 +35,4 @@ tell which host to declare. The actor named the destination itself, so the body 
 
 ## History
 
-Upstream: to file — prepared in the fork: branch `upstream/egress-denial-names-host-v2` (DCO signed off; `upstream/egress-denial-names-host` lacks the sign-off and is superseded).
+Upstream: to file — prepared in the fork: branch `upstream/egress-denial-names-host-v3` (DCO signed off, with the test change; `upstream/egress-denial-names-host` and `-v2` are superseded and not filed).
