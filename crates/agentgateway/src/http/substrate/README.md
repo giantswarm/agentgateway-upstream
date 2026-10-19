@@ -29,7 +29,8 @@ none): a CIDR containing the address, or a hostname the gateway resolves to
 it. The backend is that address, whatever the route names. Unspecified,
 multicast and broadcast addresses are refused. The gateway's and its node's
 addresses (loopback, link-local, the clouds' metadata and platform services,
-the gateway's own address, and their NAT64 forms) only match a CIDR inside
+every address of the gateway's interfaces, of both families on a dual-stack
+pod, and their NAT64 forms) only match a CIDR inside
 those ranges, never a hostname or a wider CIDR. A
 denied stream is closed with no bytes.
 No matching handler also closes
