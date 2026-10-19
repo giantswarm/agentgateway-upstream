@@ -341,14 +341,17 @@ jobs:
     - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       with:
         persist-credentials: false
-        # HEAD^1 of a pull request's merge is the line.
-        fetch-depth: 2
+        # The whole branch: the completeness check walks every commit above
+        # the pin, and HEAD^1 of a pull request's merge is the line.
+        fetch-depth: 0
+    - name: Fetch the mirror, the pin
+      run: git fetch --no-tags origin main:refs/remotes/origin/main
     - name: Fixture runs of the checks
       run: |
         .github/scripts/fork-public-links-test.sh
         .github/scripts/ledger-header-test.sh
-    - name: Every ledger file opens with a valid header
-      run: .github/scripts/ledger-header.sh agentgateway fork
+    - name: Every ledger file opens with a valid header and every carried commit is named once
+      run: .github/scripts/ledger-header.sh --complete agentgateway fork
     - name: The ledger cites public repositories only
       env:
         GH_TOKEN: ${{ github.token }}

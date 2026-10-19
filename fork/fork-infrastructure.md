@@ -4,19 +4,32 @@ fork: agentgateway
 theme: ci-publish-infra
 category: infra
 status: carried
+commits:
+  - 'fork: the Giant Swarm line of agentgateway — FORK.md, publish and sync workflows, CI on the giantswarm branch'
+  - 'fork(publish): verify every chart reference after release-charts, retry a missing push, fail on an absent one'
+  - 'ci(fork): run the Branch workflow on sync/** pushes'
+  - 'ci: publish the line''s images to gsoci from CircleCI'
+  - 'ci: publish through the orb''s stock jobs with decoupled versions'
+  - 'ci: pin giantswarm/architect orb 10.6.3'
+  - 'ci: pin giantswarm/architect orb 10.10.0'
+  - 'ci(sync): land a checked sync/** candidate on giantswarm instead of pushing an unchecked rebase'
+  - 'ci(fork): the ledger cites public repositories only'
+  - 'ci(fork): drop the throwaway line'
+  - 'ci(fork): check the ledger header schema'
+  - 'chore: declare Renovate off on the fork line'
+  - 'mcp: name the limit and the size when an upstream response exceeds the buffer'
+  - 'revert(mcp): drop the named buffer error on an MCP upstream''s response'
+  - 'fix(substrate): answer a gRPC caller with the resume''s own status'
+  - 'revert(substrate): answer a gRPC caller of the ingress with the HTTP-to-gRPC fallback again'
+  - 'test: throwaway private link, reverted in the next commit'
 upstream:
   outcome: fork-only
   refs: []
   exit: 'keep; delete the 3 net-zero commit pairs (#17/#36, #44/#47, 8c6f5049/1184ee60) at the next re-pin'
 depends_on: []
-commit: ""
 verified: 2026-10-19
 ---
 # Fork infrastructure
-
-- **Status:** carried
-- **Upstream:** not for upstream; ours to keep
-- **Our commit:** the `giantswarm` branch history
 
 ## Change
 
@@ -25,3 +38,9 @@ Fork infrastructure: this file, the README pointer, `CODEOWNERS`, `.circleci/con
 ## Reason
 
 the line's CI, publishing and sync. Three commit pairs on the branch cancel each other and replay at every re-pin: `6fd54c3b`/`69d08be0` (#17, reverted by #36), `af76adcf`/`3e7ce01b` (#44, reverted by #47) and `8c6f5049`/`1184ee60` (a throwaway private link and its removal)
+
+## History
+
+not for upstream; ours to keep
+
+the `giantswarm` branch history

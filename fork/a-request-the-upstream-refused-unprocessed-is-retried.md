@@ -4,19 +4,16 @@ fork: agentgateway
 theme: session-lifecycle
 category: bugfix
 status: carried
+commits:
+  - 'fix(proxy): retry a request the upstream refused before processing it'
 upstream:
   outcome: to-file
   refs: []
   exit: file as a PR (RFC 9113 8.7 makes the retry safe)
 depends_on: []
-commit: dfb7ae1d
 verified: 2026-10-19
 ---
 # A request the upstream refused unprocessed is retried on a fresh connection
-
-- **Status:** carried
-- **Upstream:** to file — prepared in the fork: branch `upstream/retry-unprocessed-h2-stream` (`d1ca056a6`, on the mirror `main` @ `f112c57e`); upstream `main` has no retry of a refused HTTP/2 stream (searched 2026-10-14: "refused", "goaway", "unprocessed"). Drops at the re-pin onto a commit containing it
-- **Our commit:** the `fix(proxy): retry a request the upstream refused before processing it` commit
 
 ## Change
 
@@ -25,3 +22,9 @@ A request whose HTTP/2 stream the upstream reset with `REFUSED_STREAM`, or which
 ## Reason
 
 Substrate's egress gateway answered `503` to an actor's `POST .../git-upload-pack` to github.com when a pooled HTTP/2 connection the upstream was closing refused the new stream, and the actor's skill fetch failed ([giantswarm/substrate#401](https://github.com/giantswarm/substrate/issues/401)). A refused stream was never processed by the server, so RFC 9113, section 8.7, makes it safe to retry
+
+## History
+
+to file — prepared in the fork: branch `upstream/retry-unprocessed-h2-stream` (`d1ca056a6`, on the mirror `main` @ `f112c57e`); upstream `main` has no retry of a refused HTTP/2 stream (searched 2026-10-14: "refused", "goaway", "unprocessed"). Drops at the re-pin onto a commit containing it
+
+the `fix(proxy): retry a request the upstream refused before processing it` commit

@@ -1,0 +1,19 @@
+# Commit subjects on `giantswarm` that no ledger file needs to name
+# (`.github/scripts/ledger-header.sh --complete`, `fork-ledger validate --complete`):
+# one prefix per line, matched against the subject with its trailing " (#N)" removed.
+# Ledger and FORK.md edits, documentation commits.
+docs(
+docs:
+# Re-pin tooling: pin annotations, release rows.
+chore(fork)
+# The giantswarm-align-files bot.
+chore: align files
+# Renovate and hand-made dependency pins.
+chore(deps)
+# The sync workflow's markers.
+sync:
+# Folded into the commit they name at the next re-pin.
+amend!
+fixup!
+# Release-row tooling fixes.
+fix(fork)
