@@ -9,7 +9,7 @@ upstream:
   refs: []
   exit: file as a PR (RFC 9113 8.7 makes the retry safe)
 depends_on: []
-commit: ""
+commit: dfb7ae1d
 verified: 2026-10-19
 ---
 # A request the upstream refused unprocessed is retried on a fresh connection

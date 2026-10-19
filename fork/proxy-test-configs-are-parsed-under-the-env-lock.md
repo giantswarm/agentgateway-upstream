@@ -9,7 +9,7 @@ upstream:
   refs: []
   exit: file in the test-flake batch
 depends_on: []
-commit: ""
+commit: c0144ae0
 verified: 2026-10-19
 ---
 # Proxy test configs are parsed under the env lock

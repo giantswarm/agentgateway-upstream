@@ -9,7 +9,7 @@ upstream:
   refs: []
   exit: goes with the path_prefix PR
 depends_on: [substrate-egress-applies-credential-header-by-request-path-prefix]
-commit: ""
+commit: 20e09671
 verified: 2026-10-19
 ---
 # The Substrate egress path-prefix escape forms are tested

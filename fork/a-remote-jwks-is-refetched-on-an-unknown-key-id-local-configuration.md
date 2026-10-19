@@ -9,7 +9,7 @@ upstream:
   refs: [agentgateway/agentgateway#2798, agentgateway/agentgateway#3037, giantswarm/agentgateway-upstream#75]
   exit: 'lands or dies with #3037'
 depends_on: []
-commit: ""
+commit: 14e5f1a8
 verified: 2026-10-19
 ---
 # A remote JWKS is refetched on an unknown key id, local configuration

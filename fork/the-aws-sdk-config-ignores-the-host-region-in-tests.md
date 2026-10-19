@@ -9,7 +9,7 @@ upstream:
   refs: []
   exit: file in the test-flake batch
 depends_on: []
-commit: ""
+commit: 11605c48
 verified: 2026-10-19
 ---
 # The AWS SDK config ignores the host region in tests

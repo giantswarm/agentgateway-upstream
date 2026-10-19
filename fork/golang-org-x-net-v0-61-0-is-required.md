@@ -9,7 +9,7 @@ upstream:
   refs: []
   exit: drops when upstream requires v0.61.0 or later
 depends_on: []
-commit: ""
+commit: 8e9cc21b
 verified: 2026-10-19
 ---
 # golang.org/x/net v0.61.0 is required

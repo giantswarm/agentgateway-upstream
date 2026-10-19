@@ -9,7 +9,7 @@ upstream:
   refs: [agentgateway/agentgateway#3873]
   exit: drops at re-pin; RequestLimitExceeded gap unfiled
 depends_on: []
-commit: ""
+commit: 6f9547b2
 verified: 2026-10-19
 ---
 # The gRPC status of a trailers-only refusal is logged

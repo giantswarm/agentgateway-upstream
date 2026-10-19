@@ -9,7 +9,7 @@ upstream:
   refs: []
   exit: file as a PR; narrow the new ProxyError variant to MCP first
 depends_on: []
-commit: ""
+commit: 766edf42
 verified: 2026-10-19
 ---
 # A stateful MCP session leaves a pinned endpoint that is gone

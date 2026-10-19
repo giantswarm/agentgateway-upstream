@@ -9,7 +9,7 @@ upstream:
   refs: [agentgateway/agentgateway#2798, agentgateway/agentgateway#3924, agentgateway/agentgateway#3936]
   exit: file draft E issue; no uptake in 4 weeks then drop the RPC and rely on Dex key overlap
 depends_on: []
-commit: ""
+commit: 90fca49e
 verified: 2026-10-19
 ---
 # A pushed remote JWKS is refetched on an unknown key id under Kubernetes

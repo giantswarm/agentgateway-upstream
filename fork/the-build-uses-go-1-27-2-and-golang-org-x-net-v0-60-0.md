@@ -9,7 +9,7 @@ upstream:
   refs: []
   exit: drops when upstream builds with 1.27.2 or later
 depends_on: []
-commit: ""
+commit: 253b2371
 verified: 2026-10-19
 ---
 # The build uses Go 1.27.2 and golang.org/x/net v0.60.0
