@@ -9,6 +9,7 @@ commits:
   - 'fix(substrate): a tcp rule reaches metadata services and the gateway only by a narrow CIDR'
   - 'fix(substrate): the local-use NAT64 prefix is local for a tcp rule'
   - 'fix(substrate): every address of the gateway is local for a tcp rule'
+  - 'style(substrate): rustfmt the tcp interface-address test'
 upstream:
   outcome: to-file
   refs: [giantswarm/substrate#164]
