@@ -1927,6 +1927,11 @@ async fn substrate_egress_replaces_only_requested_credentials(
 		(simple_mock().await, vec![])
 	};
 	let port = upstream.address().port();
+	// GitLab addresses a project by its encoded path: the origin must see `%2F` and `%252F` as sent,
+	// and the credential scoped to the path prefix above it still applies.
+	let path_prefix =
+		format!("/substrate-egress-credentials-{https}-{placeholder}-{port}-{outer_http2}/projects/");
+	let path = format!("{path_prefix}group%2Fproject/files/a%252Fb");
 	let effects = Some(protos::ateapi::HttpRuleEffects {
 		replace_headers: vec![protos::ateapi::CredentialHeader {
 			header: "authorization".to_owned(),
@@ -1940,7 +1945,7 @@ async fn substrate_egress_replaces_only_requested_credentials(
 				audiences: vec!["https://api.example.com".to_owned()],
 				expiration_seconds: jwt_expiration_seconds,
 			}),
-			..Default::default()
+			path_prefix,
 		}],
 	});
 	let ports = Some(protos::ateapi::Ports {
@@ -2089,7 +2094,6 @@ async fn substrate_egress_replaces_only_requested_credentials(
 
 	let io = open_actor_egress_tunnel_protocol(&gateway, port, outer_http2).await;
 
-	let path = format!("/substrate-egress-credentials-{https}-{placeholder}-{port}-{outer_http2}");
 	let authorization = if placeholder {
 		"AuThOrIzAtIoN: Bearer actor-supplied\r\n"
 	} else {
@@ -2165,6 +2169,7 @@ async fn substrate_egress_replaces_only_requested_credentials(
 		upstream_requests.len(),
 		if delayed_actor_jwt || repeated { 2 } else { 1 }
 	);
+	assert_eq!(upstream_requests[0].url.path(), path);
 	assert_eq!(
 		upstream_requests[0]
 			.headers
