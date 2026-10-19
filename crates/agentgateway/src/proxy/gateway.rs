@@ -750,6 +750,8 @@ impl Gateway {
 						Some(authority) => authority.as_str(),
 						None => return Ok(ProxyError::InvalidRequest.into_response_with_grpc(false)),
 					};
+					// Only an address the actor named is one a tcp rule may decide on.
+					let connect_to_address = authority.parse::<SocketAddr>().is_ok();
 					let (target_address, bind) = {
 						let binds = inputs.stores.read_binds();
 						if let Ok(addr) = authority.parse::<SocketAddr>() {
@@ -827,6 +829,11 @@ impl Gateway {
 						let mut downstream = Socket::from_upgraded(connection, target_address, downstream);
 						if let Some(identity) = actor_identity {
 							downstream.ext_mut().insert(identity);
+							if connect_to_address {
+								downstream
+									.ext_mut()
+									.insert(substrate::EgressConnectAddress(target_address));
+							}
 						}
 						if let Some(policy) = substrate_egress_actor_resolution {
 							downstream.ext_mut().insert(policy);
@@ -1080,11 +1087,22 @@ impl Gateway {
 		mut stream: Socket,
 		_drain: DrainWatcher,
 	) {
-		if stream.ext::<ActorIdentity>().is_some()
-			&& stream.ext::<EgressTlsMode>() != Some(&EgressTlsMode::Passthrough)
-		{
-			debug!(bind=%bind_name, "actor egress denied unsupported protocol");
-			return;
+		if stream.ext::<ActorIdentity>().is_some() {
+			match stream.ext::<EgressTlsMode>() {
+				Some(EgressTlsMode::Passthrough) => {},
+				Some(_) => {
+					debug!(bind=%bind_name, "actor egress denied unsupported protocol");
+					return;
+				},
+				// Neither TLS nor HTTP: a tcp rule decides.
+				None => {
+					let client = super::httpproxy::PolicyClient::new(inputs.clone());
+					if let Err(error) = substrate::authorize_tcp(&client, stream.ext_mut()).await {
+						debug!(bind=%bind_name, %error, "actor tcp egress denied");
+						return;
+					}
+				},
+			}
 		}
 		let selected_listener = match selected_listener {
 			Some(l) => l,
