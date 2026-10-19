@@ -30,6 +30,6 @@ Drops at the re-pin onto an upstream commit that contains the upstream change.
 
 ## History
 
-to file — prepared in the fork: branch `upstream/substrate-egress-tcp-rule-v2` (every address of the gateway local, both families). Branch `upstream/substrate-egress-tcp-rule` is superseded by it and is not filed. It follows the Substrate API's `tcp` rule, prepared on the Substrate line's branch `upstream/egress-tcp-rule` ([giantswarm/substrate#164](https://github.com/giantswarm/substrate/issues/164)).
+to file — prepared in the fork: branch `upstream/substrate-egress-tcp-rule-v3` (every address of the gateway local, both families). Branches `upstream/substrate-egress-tcp-rule` and `upstream/substrate-egress-tcp-rule-v2` are superseded by it and are not filed. It follows the Substrate API's `tcp` rule, prepared on the Substrate line's branch `upstream/egress-tcp-rule` ([giantswarm/substrate#164](https://github.com/giantswarm/substrate/issues/164)).
 
 the `feat(substrate): relay TCP a tcp rule allows` commit on `giantswarm`
