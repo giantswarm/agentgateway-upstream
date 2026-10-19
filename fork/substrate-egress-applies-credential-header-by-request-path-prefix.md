@@ -9,7 +9,7 @@ upstream:
   refs: [agent-substrate/substrate#2515, agent-substrate/substrate#2541, agentgateway/agentgateway#3985]
   exit: 'file only after as#2541 is answered and as#2515 lands; rebase on #3985'
 depends_on: [agent-substrate/substrate#2541, giantswarm/substrate:egress-scopes-credential-header-to-request-path-prefix]
-commit: ""
+commit: giantswarm/agentgateway-upstream#65
 verified: 2026-10-19
 ---
 # The Substrate egress applies a credential header by its request path prefix
