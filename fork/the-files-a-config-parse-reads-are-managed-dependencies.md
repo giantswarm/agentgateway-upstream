@@ -6,7 +6,7 @@ category: bugfix
 status: carried
 upstream:
   outcome: superseded
-  refs: [agentgateway/agentgateway#20, agentgateway/agentgateway#3751, agentgateway/agentgateway#3794, agentgateway/agentgateway#3863]
+  refs: [giantswarm/agentgateway-upstream#20, agentgateway/agentgateway#3751, agentgateway/agentgateway#3794, agentgateway/agentgateway#3863]
   exit: drops at re-pin onto 0a8476fe
 depends_on: [a-managed-file-resource-is-read-from-disk-on-every-fetch]
 commit: 611793c3
