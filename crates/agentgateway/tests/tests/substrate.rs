@@ -1702,7 +1702,8 @@ async fn substrate_egress_connect_status_at(
 	if response.starts_with("HTTP/1.1 200 OK\r\n") {
 		io.write_all(payload).await.unwrap();
 		StatusCode::OK
-	} else if response.starts_with("HTTP/1.1 403 Forbidden\r\n") {
+	} else if response.starts_with("HTTP/1.1 403 ") {
+		// A Substrate egress denial carries its message as the reason phrase.
 		StatusCode::FORBIDDEN
 	} else if response.starts_with("HTTP/1.1 503 Service Unavailable\r\n") {
 		StatusCode::SERVICE_UNAVAILABLE
@@ -2410,7 +2411,7 @@ async fn substrate_egress_selects_tls_from_policy_and_rechecks_http(
 	let expected = if allowed_request {
 		"HTTP/1.1 200 OK"
 	} else {
-		"HTTP/1.1 403 Forbidden"
+		"HTTP/1.1 403 actor egress policy denied https to "
 	};
 	assert!(
 		String::from_utf8_lossy(&response).starts_with(expected),
@@ -2604,7 +2605,7 @@ async fn substrate_egress_denies_http_upgrades_without_dialing(
 			continue;
 		}
 		let expected = if upgrading || !policy_allowed {
-			"HTTP/1.1 403 Forbidden\r\n"
+			"HTTP/1.1 403 "
 		} else {
 			"HTTP/1.1 200 OK\r\n"
 		};
@@ -2618,13 +2619,19 @@ async fn substrate_egress_denies_http_upgrades_without_dialing(
 				.split_at(response.windows(4).position(|b| b == b"\r\n\r\n").unwrap() + 4)
 				.1;
 			let expected = if !upgrading {
-				"actor egress policy denied"
+				let text = String::from_utf8_lossy(body);
+				assert!(
+					text.starts_with("actor egress policy denied http to localhost:")
+						&& text.ends_with("the agent's author can allow it in the agent's egress settings"),
+					"{text}"
+				);
+				text.into_owned()
 			} else if upgrade == "CONNECT" {
-				"CONNECT egress is not supported"
+				"CONNECT egress is not supported".to_owned()
 			} else if upgrade.to_ascii_lowercase().contains("websocket") {
-				"WebSocket egress is not supported"
+				"WebSocket egress is not supported".to_owned()
 			} else {
-				"HTTP upgrades, including CONNECT, are denied for actor egress"
+				"HTTP upgrades, including CONNECT, are denied for actor egress".to_owned()
 			};
 			assert_eq!(body, expected.as_bytes());
 		}
