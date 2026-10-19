@@ -6,6 +6,7 @@ mod ingress;
 pub use egress::SubstrateEgress;
 pub(crate) use egress::{
 	EgressConnectAddress, EgressRequestProtocol, EgressTlsMode, authorize_tcp, authorize_tls,
+	destination_denied,
 };
 pub(crate) use egress_actor_resolution::ActorIdentity;
 pub use egress_actor_resolution::EgressActorResolution;
