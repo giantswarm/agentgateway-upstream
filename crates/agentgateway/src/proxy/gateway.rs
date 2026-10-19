@@ -487,10 +487,21 @@ impl Gateway {
 				const AUTO_PROTOCOL_PEEK_LEN: usize = 8;
 				let def = frontend::TLS::default();
 				let to = policies.tls.as_ref().unwrap_or(&def).handshake_timeout;
+				// An actor's tunnel that sends no TLS or HTTP before the timeout, or
+				// closes first, is raw TCP to its CONNECT address (a server-first
+				// protocol, a connect-only probe): its tcp rules decide on it, and a
+				// refusal is counted.
+				let actor_egress = raw_stream.ext::<ActorIdentity>().is_some();
 				let (ext, metrics, inner) = raw_stream.into_parts();
 				let mut rewind = Socket::new_rewind(inner);
 				let mut buf = [0u8; AUTO_PROTOCOL_PEEK_LEN];
 				match tokio::time::timeout(to, peek_auto_protocol(&mut rewind, &mut buf)).await {
+					Err(_) | Ok(Ok(0)) if actor_egress => {
+						debug!(bind=%bind_name, "actor egress sent no bytes, treating as tcp");
+						rewind.rewind();
+						let stream = Socket::from_rewind(ext, metrics, rewind);
+						Self::proxy_tcp(bind_name, inputs, None, stream, drain).await
+					},
 					Err(_) => {
 						debug!(bind=%bind_name, "auto protocol detection timed out");
 					},
