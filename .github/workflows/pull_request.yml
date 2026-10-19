@@ -4,7 +4,7 @@ name: Branch
 # branch `giantswarm` and its pull requests, on GitHub-hosted runners (the org
 # has no Blacksmith runners), Linux lanes only (the platform runs Linux), the
 # build caches rolled forward by pushes to `giantswarm`, plus govulncheck for
-# the controller's Go module graph, the ledger's public-links check and one
+# the controller's Go module graph, the ledger's public-links and header checks and one
 # aggregate `ci-ok` status for the ruleset. See FORK.md.
 
 on:
@@ -343,8 +343,12 @@ jobs:
         persist-credentials: false
         # HEAD^1 of a pull request's merge is the line.
         fetch-depth: 2
-    - name: Fixture runs of the check
-      run: .github/scripts/fork-public-links-test.sh
+    - name: Fixture runs of the checks
+      run: |
+        .github/scripts/fork-public-links-test.sh
+        .github/scripts/ledger-header-test.sh
+    - name: Every ledger file opens with a valid header
+      run: .github/scripts/ledger-header.sh agentgateway fork
     - name: The ledger cites public repositories only
       env:
         GH_TOKEN: ${{ github.token }}

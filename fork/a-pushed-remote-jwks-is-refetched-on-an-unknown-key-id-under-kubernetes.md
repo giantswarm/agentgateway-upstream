@@ -1,3 +1,17 @@
+---
+id: a-pushed-remote-jwks-is-refetched-on-an-unknown-key-id-under-kubernetes
+fork: agentgateway
+theme: jwks
+category: feature
+status: carried
+upstream:
+  outcome: fork-only
+  refs: [agentgateway/agentgateway#2798, agentgateway/agentgateway#3924, agentgateway/agentgateway#3936]
+  exit: file draft E issue; no uptake in 4 weeks then drop the RPC and rely on Dex key overlap
+depends_on: []
+commit: 90fca49e
+verified: 2026-10-19
+---
 # A pushed remote JWKS is refetched on an unknown key id under Kubernetes
 
 - **Status:** carried

@@ -1,3 +1,17 @@
+---
+id: the-substrate-egress-injects-a-minted-actor-jwt
+fork: agentgateway
+theme: credential-injection
+category: feature
+status: carried
+upstream:
+  outcome: superseded
+  refs: [agent-substrate/substrate#1960, agent-substrate/substrate#2135, agent-substrate/substrate#2141, agent-substrate/substrate#2421, agentgateway/agentgateway#3985]
+  exit: 're-pin onto #3985; fix the MintActorJWT casing in giantswarm/substrate to upstream''s MintActorJwt'
+depends_on: [agent-substrate/substrate#1960]
+commit: 3902417a
+verified: 2026-10-19
+---
 # The Substrate egress injects an actor JWT it mints through Control.MintActorJWT
 
 - **Status:** carried
