@@ -727,7 +727,7 @@ fn tls_mode(
 
 /// The address an actor's CONNECT named, set only when it named an IP literal,
 /// and the gateway's own address the CONNECT arrived on. A tcp rule decides on
-/// the first; the second is the gateway itself.
+/// the first; the second is one of the gateway's addresses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct EgressConnectAddress {
 	pub target: SocketAddr,
@@ -762,9 +762,10 @@ pub(crate) async fn authorize_tcp(
 			"tcp egress to {address} names no single host"
 		)));
 	}
+	let gateway = gateway_addresses(gateway)?;
 	let policy = fetch_policy(&resolution.target, client, identity).await?;
 	let upstream = &client.inputs.upstream;
-	if !tcp_rule_allows(&policy, address, gateway, |name| {
+	if !tcp_rule_allows(&policy, address, &gateway, |name| {
 		upstream.resolve_all(name.into())
 	})
 	.await
@@ -802,12 +803,48 @@ const TCP_LOCAL_RANGES: [&str; 8] = [
 	"64:ff9b:1::/48",
 ];
 
-/// The range of TCP_LOCAL_RANGES an address is in, or the gateway's own
-/// address as a single-address range. Only a CIDR inside that range reaches
+/// Every address of the gateway, canonical: the one the CONNECT arrived on and
+/// those of its network interfaces, so that a dual-stack pod's address of the
+/// other family is the gateway's too. Unlistable interfaces refuse the stream.
+fn gateway_addresses(arrived_on: IpAddr) -> Result<Vec<IpAddr>, ProxyError> {
+	let mut addresses = interface_addresses().map_err(|error| {
+		ProxyError::SubstrateEgressDenied(format!("cannot list the gateway's addresses: {error}"))
+	})?;
+	addresses.push(arrived_on);
+	for address in &mut addresses {
+		*address = address.to_canonical();
+	}
+	addresses.sort_unstable();
+	addresses.dedup();
+	Ok(addresses)
+}
+
+#[cfg(target_family = "unix")]
+fn interface_addresses() -> std::io::Result<Vec<IpAddr>> {
+	Ok(
+		nix::ifaddrs::getifaddrs()?
+			.filter_map(|interface| interface.address)
+			.filter_map(|address| {
+				address
+					.as_sockaddr_in()
+					.map(|v4| IpAddr::V4(v4.ip()))
+					.or_else(|| address.as_sockaddr_in6().map(|v6| IpAddr::V6(v6.ip())))
+			})
+			.collect(),
+	)
+}
+
+#[cfg(not(target_family = "unix"))]
+fn interface_addresses() -> std::io::Result<Vec<IpAddr>> {
+	Ok(Vec::new())
+}
+
+/// The range of TCP_LOCAL_RANGES an address is in, or one of the gateway's own
+/// addresses as a single-address range. Only a CIDR inside that range reaches
 /// it: a wider CIDR or a hostname that resolves to it never does. An address
 /// of the NAT64 well-known prefix (64:ff9b::/96) is local as a whole when the
 /// IPv4 address it embeds is.
-fn tcp_local_range(ip: IpAddr, gateway: IpAddr) -> Option<ipnet::IpNet> {
+fn tcp_local_range(ip: IpAddr, gateway: &[IpAddr]) -> Option<ipnet::IpNet> {
 	if let IpAddr::V6(v6) = ip
 		&& let [0x0064, 0xff9b, 0, 0, 0, 0, high, low] = v6.segments()
 	{
@@ -816,7 +853,7 @@ fn tcp_local_range(ip: IpAddr, gateway: IpAddr) -> Option<ipnet::IpNet> {
 		));
 		return tcp_local_range(embedded, gateway).map(|_| ipnet::IpNet::from(ip));
 	}
-	if ip == gateway.to_canonical() {
+	if gateway.contains(&ip) {
 		return Some(ipnet::IpNet::from(ip));
 	}
 	TCP_LOCAL_RANGES
@@ -831,7 +868,7 @@ fn tcp_local_range(ip: IpAddr, gateway: IpAddr) -> Option<ipnet::IpNet> {
 async fn tcp_rule_allows<F, Fut>(
 	policy: &protos::ateapi::EgressPolicy,
 	address: SocketAddr,
-	gateway: IpAddr,
+	gateway: &[IpAddr],
 	resolve: F,
 ) -> bool
 where
@@ -2143,14 +2180,18 @@ mod tests {
 		}
 	}
 
-	const GATEWAY: IpAddr = IpAddr::V4(std::net::Ipv4Addr::new(10, 0, 0, 5));
+	// A dual-stack gateway: one address of each family.
+	const GATEWAY: [IpAddr; 2] = [
+		IpAddr::V4(std::net::Ipv4Addr::new(10, 0, 0, 5)),
+		IpAddr::V6(std::net::Ipv6Addr::new(0xfd00, 0x10, 0, 0, 0, 0, 0, 5)),
+	];
 
 	async fn tcp_allows(rules: Vec<protos::ateapi::EgressRule>, address: &str) -> bool {
 		let policy = protos::ateapi::EgressPolicy {
 			rules,
 			..Default::default()
 		};
-		tcp_rule_allows(&policy, address.parse().unwrap(), GATEWAY, |name| {
+		tcp_rule_allows(&policy, address.parse().unwrap(), &GATEWAY, |name| {
 			let addresses: Box<[IpAddr]> = match name {
 				"git.example.com" => [
 					"192.0.2.10".parse().unwrap(),
@@ -2330,6 +2371,37 @@ mod tests {
 				"10.0.0.5:15000",
 				true,
 			),
+			// Its address of each family, whichever the CONNECT arrived on.
+			(
+				tcp_rule(&[], &["0.0.0.0/0"], all_ports()),
+				"10.0.0.5:15000",
+				false,
+			),
+			(
+				tcp_rule(&[], &["::/0"], all_ports()),
+				"[fd00:10::5]:15000",
+				false,
+			),
+			(
+				tcp_rule(&[], &["fd00:10::/64"], all_ports()),
+				"[fd00:10::5]:15000",
+				false,
+			),
+			(
+				tcp_rule(&[], &["fd00:10::/64"], all_ports()),
+				"[fd00:10::6]:15000",
+				true,
+			),
+			(
+				tcp_rule(&[], &["fd00:10::5/128"], all_ports()),
+				"[fd00:10::5]:15000",
+				true,
+			),
+			(
+				tcp_rule(&["rebind.example.com"], &[], all_ports()),
+				"[fd00:10::5]:15000",
+				false,
+			),
 			// NAT64 forms of local addresses.
 			(
 				tcp_rule(&[], &["64:ff9b::/96"], all_ports()),
@@ -2356,8 +2428,59 @@ mod tests {
 				"[64:ff9b:1:7f00:1::]:15000",
 				false,
 			),
+			// The gateway's IPv4 address in its NAT64 form.
+			(
+				tcp_rule(&[], &["::/0"], all_ports()),
+				"[64:ff9b::a00:5]:15000",
+				false,
+			),
+			(
+				tcp_rule(&[], &["64:ff9b::/96"], all_ports()),
+				"[64:ff9b::a00:5]:15000",
+				false,
+			),
+			(
+				tcp_rule(&[], &["64:ff9b::a00:5/128"], all_ports()),
+				"[64:ff9b::a00:5]:15000",
+				true,
+			),
+			(
+				tcp_rule(&[], &["64:ff9b::/96"], all_ports()),
+				"[64:ff9b::a00:6]:15000",
+				true,
+			),
 		] {
 			assert_eq!(tcp_allows(vec![rule], address).await, allowed, "{address}");
+		}
+	}
+
+	#[test]
+	fn gateway_addresses_hold_the_connect_address_and_every_interface_address() {
+		let addresses = gateway_addresses("::ffff:192.0.2.99".parse().unwrap()).unwrap();
+		assert!(addresses.contains(&"192.0.2.99".parse().unwrap()));
+		let interfaces = interface_addresses().unwrap();
+		#[cfg(target_family = "unix")]
+		assert!(!interfaces.is_empty(), "no interface address listed");
+		for interface in interfaces {
+			assert!(addresses.contains(&interface.to_canonical()), "{interface}");
+		}
+	}
+
+	#[tokio::test]
+	async fn tcp_reaches_no_interface_address_through_a_wider_cidr() {
+		// The CONNECT arrived on loopback; every other address of the host,
+		// of either family, is the gateway's all the same.
+		let gateway = gateway_addresses(IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)).unwrap();
+		let policy = protos::ateapi::EgressPolicy {
+			rules: vec![tcp_rule(&[], &["0.0.0.0/0", "::/0"], all_ports())],
+			..Default::default()
+		};
+		for ip in &gateway {
+			let address = SocketAddr::new(*ip, 15000);
+			let allowed =
+				tcp_rule_allows(&policy, address, &gateway, |_| async { Box::<[IpAddr]>::default() })
+					.await;
+			assert!(!allowed, "{address}");
 		}
 	}
 
