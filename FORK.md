@@ -308,6 +308,17 @@ for a line that rebuilds on re-pins and patches; a persisted cargo cache is an i
 | [giantswarm/agentgateway](https://github.com/giantswarm/agentgateway) (the packaging chart) | `sync/patches/values/values.yaml` → `helm/agentgateway/values.yaml`: `controller.image` and `proxy.image` (repository and tag; Renovate follows the stable tags) | a release from `gsoci.azurecr.io/giantswarm/agentgateway-upstream/{controller,agentgateway}` — the move from the flattened names and the `-gs.` cap is the packaging chart's own pull request; its chart stays upstream's, vendored from `cr.agentgateway.dev` until the line carries a chart patch (then `vendir.yml` points at this registry's charts) |
 | [giantswarm/agent-platform](https://github.com/giantswarm/agent-platform) | the meta chart follows the packaging chart through `components.agentgateway.versionRange`; the connectivity chart pins the data-plane image in `agentgateway.proxy.image` (repository and tag, rendered into `AgentgatewayParameters`) | the same release |
 
+## Before you carry a patch
+
+A carried patch needs a placement and an upstream exit, and its ledger file under `fork/` records both: the
+placement in `## Reason` and `upstream.outcome`, the exit in `upstream.exit`. Place it by the first class that
+holds: drop (nothing consumes it), upstream already has it (name the mechanism and its configuration), platform
+(a Giant Swarm product choice, in the agent-platform charts, `giantswarm/agentgateway` or our own images),
+upstream issue (a generic gap that needs design), upstream pull request (a small generic fix), fork-only (a named
+reason and a dated exit). Before a new field, flag or schema, look for an upstream mechanism or an established
+standard, such as Gateway API policy attachment, first. The full rule is Team Bumblebee's *Upstream placement*
+section, kept in its internal plans repository.
+
 ## Contributing
 
 - **Upstream first, prepared here.** Every behavioural change is prepared for upstream
