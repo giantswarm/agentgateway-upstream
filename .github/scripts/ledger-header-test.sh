@@ -93,6 +93,7 @@ case_ "a subject named twice" 1 "twice.md" "$(third | sed 's/^id: third-row$/id:
 case_ "the old commit key" 1 "old-commit.md" "$(third | sed 's/^id: third-row$/id: old-commit/; s/^verified:/commit: 52f1c49a\nverified:/')" "commit is no longer a field"
 case_ "a Status bullet" 1 "bullet.md" "$(third | sed 's/^id: third-row$/id: bullet/; s/^## Change$/- **Status:** carried\n\n## Change/')" "belongs in the header"
 case_ "no History" 1 "no-history.md" "$(third | sed 's/^id: third-row$/id: no-history/; /^## History/,$d')" "no ## History section"
+case_ "a subject the YAML quoting ends early" 1 "bad-quote.md" "$(third | sed "s/^id: third-row\$/id: bad-quote/; s/^  - .fix(x).*/  - 'fix(x): the line's subject'/")" "not valid YAML"
 
 # --complete: a throwaway repository with a mirror branch and three carried commits.
 repo="${DIR}/repo"
