@@ -7,11 +7,11 @@ status: carried
 commits:
   - 'fix(substrate): apply a path-prefixed credential header to a path with an encoded slash'
 upstream:
-  outcome: to-file
-  refs: []
-  exit: goes with the path_prefix PR
-depends_on: [substrate-egress-applies-credential-header-by-request-path-prefix, substrate-egress-path-prefix-escapes-are-tested, giantswarm/substrate#481]
-verified: 2026-10-19
+  outcome: fork-only
+  refs: [agent-substrate/substrate#2541]
+  exit: "with substrate-egress-applies-credential-header-by-request-path-prefix: drops in both outcomes"
+depends_on: [substrate-egress-applies-credential-header-by-request-path-prefix, substrate-egress-path-prefix-escapes-are-tested, giantswarm/substrate:egress-path-prefix-admits-encoded-slash]
+verified: 2026-10-20
 ---
 # A path-prefixed credential header applies to a path with an encoded slash
 
@@ -30,3 +30,5 @@ Drops at the re-pin onto an upstream commit that contains the upstream change.
 to file — prepared in the fork: branch [`upstream/substrate-egress-encoded-slash`](https://github.com/giantswarm/agentgateway-upstream/tree/upstream/substrate-egress-encoded-slash) (`3fb47a60`), on top of `upstream/substrate-egress-path-prefix-escapes` (`2b4cb408`), so it goes upstream with or after the path-prefix change
 
 the `fix(substrate): apply a path-prefixed credential header to a path with an encoded slash` commit on `giantswarm`, a `cherry-pick -x` of the upstream branch's commit, from [giantswarm/agentgateway-upstream#106](https://github.com/giantswarm/agentgateway-upstream/pull/106) ([#105](https://github.com/giantswarm/agentgateway-upstream/issues/105))
+
+2026-10-20, decided on internal issue 38652, comment 6301541135: class 6 fork-only, follower; destination none of its own; first step none; branch `upstream/substrate-egress-encoded-slash` @ `3fb47a60`; test the encoded-slash cases; re-check 2026-11-17; owner unassigned.
