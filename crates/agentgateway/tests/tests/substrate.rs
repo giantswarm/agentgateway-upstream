@@ -2442,10 +2442,16 @@ async fn substrate_egress_rejects_unrecognized_or_unauthorized_connections(#[cas
 
 #[cfg(feature = "crypto-aws-lc")]
 #[rstest::rstest]
-#[case::listed(true)]
-#[case::unlisted_port(false)]
+#[case::listed(true, ClientOpens::Speaks)]
+#[case::unlisted_port(false, ClientOpens::Speaks)]
+#[case::listed_server_first(true, ClientOpens::Waits)]
+#[case::unlisted_server_first(false, ClientOpens::Waits)]
+#[case::unlisted_connect_only(false, ClientOpens::Closes)]
 #[tokio::test]
-async fn substrate_egress_relays_raw_tcp_a_tcp_rule_allows(#[case] listed: bool) {
+async fn substrate_egress_relays_raw_tcp_a_tcp_rule_allows(
+	#[case] listed: bool,
+	#[case] opens: ClientOpens,
+) {
 	// open_actor_egress_tunnel CONNECTs to 127.0.0.2, the address a tcp rule
 	// decides on and the gateway dials.
 	let raw_upstream = TcpListener::bind("127.0.0.2:0").await.unwrap();
@@ -2472,20 +2478,35 @@ async fn substrate_egress_relays_raw_tcp_a_tcp_rule_allows(#[case] listed: bool)
 	let gateway = gateway.with_tcp_route_for_listener(strng::literal!("tcp"), tcp_route);
 
 	let mut io = open_actor_egress_tunnel(&gateway, port).await;
-	// SSH: the client sends its identification string first.
-	io.write_all(b"SSH-2.0-actor\r\n").await.unwrap();
+	match opens {
+		// SSH: the client sends its identification string first.
+		ClientOpens::Speaks => io.write_all(b"SSH-2.0-actor\r\n").await.unwrap(),
+		// The client waits for the server's banner; the gateway decides once
+		// its protocol detection (1s here) saw nothing.
+		ClientOpens::Waits => {},
+		ClientOpens::Closes => io.shutdown().await.unwrap(),
+	}
 	if listed {
 		let (mut upstream, _) = tokio::time::timeout(Duration::from_secs(3), raw_upstream.accept())
 			.await
 			.expect("allowed tcp did not dial the destination")
 			.unwrap();
+		if opens == ClientOpens::Waits {
+			upstream.write_all(b"SSH-2.0-server\r\n").await.unwrap();
+			let mut answer = [0; 16];
+			io.read_exact(&mut answer).await.unwrap();
+			assert_eq!(&answer, b"SSH-2.0-server\r\n");
+			io.write_all(b"SSH-2.0-actor\r\n").await.unwrap();
+		}
 		let mut received = [0; 15];
 		upstream.read_exact(&mut received).await.unwrap();
 		assert_eq!(&received, b"SSH-2.0-actor\r\n");
-		upstream.write_all(b"SSH-2.0-server\r\n").await.unwrap();
-		let mut answer = [0; 16];
-		io.read_exact(&mut answer).await.unwrap();
-		assert_eq!(&answer, b"SSH-2.0-server\r\n");
+		if opens == ClientOpens::Speaks {
+			upstream.write_all(b"SSH-2.0-server\r\n").await.unwrap();
+			let mut answer = [0; 16];
+			io.read_exact(&mut answer).await.unwrap();
+			assert_eq!(&answer, b"SSH-2.0-server\r\n");
+		}
 	} else {
 		let mut buf = [0; 1];
 		assert_eq!(
@@ -2507,6 +2528,17 @@ async fn substrate_egress_relays_raw_tcp_a_tcp_rule_allows(#[case] listed: bool)
 		refusals(&gateway, "tcp", "127.0.0.2", port),
 		(!listed).then_some(1)
 	);
+}
+
+/// How an actor's raw TCP stream opens through its egress tunnel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClientOpens {
+	/// The client sends first.
+	Speaks,
+	/// The client waits for the server to send first.
+	Waits,
+	/// The client closes without sending (a connect-only probe).
+	Closes,
 }
 
 /// The refusals the gateway counted for the tunnel's actor and one destination.
