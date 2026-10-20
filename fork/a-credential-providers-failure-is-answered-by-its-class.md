@@ -8,8 +8,8 @@ commits:
   - 'fix(substrate): answer a credential provider''s failure by its class'
 upstream:
   outcome: open
-  refs: [agent-substrate/substrate#2555, agentgateway/agentgateway#3524, agentgateway/agentgateway#3875]
-  exit: 'Substrate contract first (as#2555), then #3875; parts 2 and 3 unfiled'
+  refs: [agent-substrate/substrate#2555, agent-substrate/substrate#2706, agentgateway/agentgateway#3524, agentgateway/agentgateway#3875]
+  exit: 'Substrate contract first (as#2706 closes as#2555), then #3875; parts 2 and 3 unfiled'
 depends_on: [agent-substrate/substrate#2555]
 verified: 2026-10-20
 ---
@@ -30,3 +30,5 @@ split in three for upstream; drops when each part has landed or been declined. (
 `971e8a51` ([#39](https://github.com/giantswarm/agentgateway-upstream/pull/39), squash; re-seated at the 2026-10-05 re-pin on #3689's `FetchSecret` span handling, the refusal log kept inside the `map_err`)
 
 [agentgateway#3524](https://github.com/agentgateway/agentgateway/pull/3524) (upstream's alignment to Substrate's provider contract, merged 2026-09-17 as `8dba3989`, already in the pin) is the contract this change departs from, not its exit, so the outcome stays open (checked 2026-10-20).
+
+2026-10-20: the Substrate contract change is the pull request [agent-substrate/substrate#2706](https://github.com/agent-substrate/substrate/pull/2706) (ericcurtin, opened 2026-10-15, "Fixes #2555"), which maps provider `Internal`, `Unknown`, `Unimplemented` and an unusable credential to 502 and `ResourceExhausted` to 503; #3875 follows it, the outcome stays open.
