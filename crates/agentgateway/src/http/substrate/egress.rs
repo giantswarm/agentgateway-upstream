@@ -118,7 +118,7 @@ fn default_credential_cache() -> CredentialCache {
 	CredentialCache::new(DEFAULT_CREDENTIAL_CACHE_CAPACITY)
 }
 
-/// Actor JWTs minted through `Control.MintActorJWT`, each reused until a third of its lifetime
+/// Actor JWTs minted through `Control.MintActorJwt`, each reused until a third of its lifetime
 /// remains. Concurrent misses for one key share a single mint.
 #[derive(Debug, Clone)]
 struct ActorJwtCache {
@@ -655,7 +655,7 @@ async fn mint_actor_jwt(
 	let mut span = policy_client.start_grpc_span(
 		&mut request,
 		target.target.as_ref(),
-		"/ateapi.Control/MintActorJWT",
+		"/ateapi.Control/MintActorJwt",
 	);
 	let response =
 		crate::proxy::dtrace::scope_future(Some(TRACE_POLICY_KIND), control.mint_actor_jwt(request))
@@ -672,13 +672,13 @@ async fn mint_actor_jwt(
 			grpc.code = ?status.code(),
 			grpc.message = status.message(),
 			error = %status,
-			"substrate control API refused MintActorJWT"
+			"substrate control API refused MintActorJwt"
 		);
 		actor_jwt_error(&status)
 	})
 }
 
-/// Maps a MintActorJWT failure to what the actor sees: an actor that is gone is 403, an
+/// Maps a MintActorJwt failure to what the actor sees: an actor that is gone is 403, an
 /// unavailable or slow control API a retryable 503, anything else (a gateway or policy
 /// misconfiguration retrying cannot fix) 500. Same classes as Substrate's own egress minter.
 fn actor_jwt_error(status: &tonic::Status) -> ProxyError {
@@ -2083,7 +2083,7 @@ mod tests {
 			);
 		}
 
-		/// Substrate serves the mint as `/ateapi.Control/MintActorJWT`, and gRPC method names are
+		/// Substrate serves the mint as `/ateapi.Control/MintActorJwt`, and gRPC method names are
 		/// case-sensitive. The client and the mock are generated from the same proto, so this pins
 		/// the path both use to the one Substrate answers.
 		#[tokio::test]
@@ -2099,7 +2099,7 @@ mod tests {
 			let body = http_body_util::Full::new(bytes::Bytes::from_static(&[0, 0, 0, 0, 0]));
 			let request = ::http::Request::builder()
 				.method(::http::Method::POST)
-				.uri("/ateapi.Control/MintActorJWT")
+				.uri("/ateapi.Control/MintActorJwt")
 				.header("content-type", "application/grpc")
 				.header("te", "trailers")
 				.body(tonic::body::Body::new(body))
