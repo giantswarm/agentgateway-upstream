@@ -9,9 +9,18 @@ commits:
 upstream:
   outcome: drops-at-repin
   refs: [agentgateway/agentgateway#3686, agentgateway/agentgateway#3751, agentgateway/agentgateway#3863]
-  exit: drops with the row above; rotation test already passes on upstream without it
+  exit: 'drops at the re-pin onto a commit containing 0a8476fe (#3863), after the projected-volume rotation test passes there without it'
+  class: 2
+  destination: 'agentgateway/agentgateway#3863 (0a8476fe, on upstream main)'
+  first_step: 'none; the next agentgateway re-pin onto a commit containing 0a8476fe'
+  source: n/a
+  test: 'the fork''s projected-volume rotation test passes on the re-pin without the patch'
+  recheck: 'at the re-pin'
+  owner: unassigned
+  draft: ""
+  decision: issuecomment-6301335159
 depends_on: [the-files-a-config-parse-reads-are-managed-dependencies]
-verified: 2026-10-19
+verified: 2026-10-20
 ---
 # A managed file resource is read from disk on every fetch
 
@@ -28,3 +37,5 @@ Substrate's egress and router gateways take their client certificate for the API
 not for upstream: on upstream `main` @ `c7ac602e` the watcher follows kubelet's `..data` symlink swap (this patch's projected-volume rotation test passes there), and a stale cached read during a reload is corrected by the file's own watch event, so the gap that remains upstream is the next row's ([agentgateway#3751](https://github.com/agentgateway/agentgateway/issues/3751)); agentgateway#3686 (merged 2026-10-01 as `5bc6301f`, in the pin since v1.6.0) is complementary and does not replace it. A workaround, not a gap: on upstream `main` @ `85d1f087` a stale cached read is followed by the file's own `refresh_file`, whose notify runs one more reload, and agentgateway#3863 (`0a8476fe`, the next row) also refreshes every newly active file in `retain_resources`, which the line lacks and which the 60 s poll hid. Drops together with the next row at the re-pin onto a commit containing `0a8476fe`, after this patch's projected-volume rotation test passes there without it
 
 `4078f630` (the squash of pull request #20: `resource_manager: read a file resource from disk on every managed fetch (#20)`, replayed clean at the 2026-09-24 and 2026-10-05 re-pins; in release 2.1.1)
+
+2026-10-20: decided in the version-pins theme review (decision issuecomment-6301335159): class 2 upstream-has-it (agentgateway#3863, `0a8476fe`); drops with the next row at the re-pin onto a commit containing it, once the fork's projected-volume rotation test passes there without the patch.
