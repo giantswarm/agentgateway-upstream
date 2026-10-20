@@ -6,7 +6,7 @@ category: feature
 status: carried
 commits:
   - 'feat(substrate): a policy denial names the destination and where it is allowed'
-  - 'test(substrate): a denial's status line carries its message'
+  - 'test(substrate): a denial''s status line carries its message'
 upstream:
   outcome: to-file
   refs: []
