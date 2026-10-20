@@ -5,7 +5,7 @@ theme: test-flakes
 category: test
 status: carried
 commits:
-  - 'deps: avoid depending on GIE conformance in go.mod'
+  - 'build(deps): avoid depending on GIE conformance in go.mod'
 upstream:
   outcome: merged
   refs: [agentgateway/agentgateway#3978, kubernetes-sigs/gateway-api#5110]
