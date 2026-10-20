@@ -9,9 +9,9 @@ commits:
 upstream:
   outcome: to-file
   refs: [agent-substrate/substrate#2515, agent-substrate/substrate#2541, agentgateway/agentgateway#3985]
-  exit: 'file only after as#2541 is answered and as#2515 lands; rebase on #3985'
+  exit: 'file only after as#2541 is answered and as#2515 lands; rebase on a main containing 38a50f69 (#3985)'
 depends_on: [agent-substrate/substrate#2541, giantswarm/substrate:egress-scopes-credential-header-to-request-path-prefix]
-verified: 2026-10-19
+verified: 2026-10-20
 ---
 # The Substrate egress applies a credential header by its request path prefix
 
@@ -30,3 +30,5 @@ Drops at the re-pin onto an upstream commit that contains the upstream change.
 to file — prepared in the fork: branch [`upstream/substrate-egress-path-prefix`](https://github.com/giantswarm/agentgateway-upstream/tree/upstream/substrate-egress-path-prefix) on upstream `main` @ `50067185`. It follows [agent-substrate/substrate#2515](https://github.com/agent-substrate/substrate/pull/2515) (open), which adds the field to Substrate's API.
 
 the `fix(substrate): apply a credential header by its request path prefix` commit on `giantswarm`, a `cherry-pick -x` of the upstream branch's commit (`substrate: …` upstream), from [#65](https://github.com/giantswarm/agentgateway-upstream/pull/65) ([#62](https://github.com/giantswarm/agentgateway-upstream/issues/62))
+
+[agentgateway#3985](https://github.com/agentgateway/agentgateway/pull/3985) (merged 2026-10-15 as `38a50f69`) adds `CredentialHeader` field 4 (`actor_jwt`) but no `path_prefix`, so it is the base this change rebases on, not its exit, and the outcome stays to-file (checked 2026-10-20).
