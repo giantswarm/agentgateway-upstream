@@ -107,7 +107,7 @@ unreachable policy service (agentgateway#3793, `0c62b5a3`) and the admission of 
 the gRPC status in the access log (agentgateway#3873, merged 2026-10-13 as `1370236e`, so it drops at the re-pin too; the request limit refusal not filed), the credential provider's failure class
 (agentgateway#3875, draft, held on Substrate's credential provider contract) and the credential header by path prefix (after agent-substrate/substrate#2515).
 Waiting on others: the JWKS refetch for local configuration (agentgateway#3037), and under Kubernetes an issue that is not filed yet. Not for upstream as is: the
-resume refusal answered at once, whose directive Substrate 1.3 and, since giantswarm/substrate#445, the line's ate-api send, and whose proper fix is Substrate's codes. The grpc pin at v1.83.2, the Go 1.27.2 build (its `x/net` v0.60.0 half is upstream) and the `x/net` v0.61.0 requirement change versions only and leave when upstream requires fixed releases (see their files in `fork/`).
+resume refusal answered at once, whose directive Substrate 1.3 and, since giantswarm/substrate#445, the line's ate-api send, and whose proper fix is Substrate's codes. The Go 1.27.2 build (its `x/net` v0.60.0 half is upstream) and the `x/net` v0.61.0 requirement change versions only and leave when upstream requires fixed releases (see their files in `fork/`); the grpc pin at v1.83.2 was reverted to the pin's v1.84.0 on 2026-10-20, once GO-2026-6443 stopped listing it.
 
 Dropped at the 2026-10-05 re-pin because the pin contains their fixes: the `GRPCRoute` method-match translation (`223b80e2`, pull request #6;
 agentgateway#3723 `2353a2c1`, merged 2026-10-01, closes our agentgateway#3715 and makes a service-only match
