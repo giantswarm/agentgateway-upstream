@@ -10,7 +10,7 @@ commits:
 upstream:
   outcome: fork-only
   refs: [agentgateway/agentgateway#3658, agentgateway/agentgateway#4028, grpc/grpc-go#9440, golang/vulndb#6580]
-  exit: 'upstream''s version, advisory disputed'
+  exit: 'upstream''s version, advisory revised'
 depends_on: []
 verified: 2026-10-20
 ---
