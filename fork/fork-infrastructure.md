@@ -5,6 +5,7 @@ theme: ci-publish-infra
 category: infra
 status: carried
 commits:
+  - 'ci(fork): a pull request closes no issue by keyword'
   - 'fork: the Giant Swarm line of agentgateway — FORK.md, publish and sync workflows, CI on the giantswarm branch'
   - 'fork(publish): verify every chart reference after release-charts, retry a missing push, fail on an absent one'
   - 'ci(fork): run the Branch workflow on sync/** pushes'
