@@ -8,9 +8,9 @@ commits:
   - 'fix(substrate): answer a credential provider''s failure by its class'
 upstream:
   outcome: open
-  refs: [agent-substrate/substrate#2555, agent-substrate/substrate#2706, agentgateway/agentgateway#3524, agentgateway/agentgateway#3875]
-  exit: 'Substrate contract first (as#2706 closes as#2555), then #3875; parts 2 and 3 unfiled'
-depends_on: [agent-substrate/substrate#2555]
+  refs: [agent-substrate/substrate#2555, agent-substrate/substrate#2706, agentgateway/agentgateway#3875, agentgateway/agentgateway#2162, agentgateway/agentgateway#3524]
+  exit: "agentgateway/agentgateway#3875 merged after agent-substrate/substrate#2706: re-seated without the body sanitizing; the ServiceNotFound part merged on its own: dropped; re-check each re-pin"
+depends_on: [agent-substrate/substrate#2706, agentgateway/agentgateway#2162]
 verified: 2026-10-20
 ---
 # A credential provider's failure is answered by its class
@@ -32,3 +32,5 @@ split in three for upstream; drops when each part has landed or been declined. (
 [agentgateway#3524](https://github.com/agentgateway/agentgateway/pull/3524) (upstream's alignment to Substrate's provider contract, merged 2026-09-17 as `8dba3989`, already in the pin) is the contract this change departs from, not its exit, so the outcome stays open (checked 2026-10-20).
 
 2026-10-20: the Substrate contract change is the pull request [agent-substrate/substrate#2706](https://github.com/agent-substrate/substrate/pull/2706) (ericcurtin, opened 2026-10-15, "Fixes #2555"), which maps provider `Internal`, `Unknown`, `Unimplemented` and an unusable credential to 502 and `ResourceExhausted` to 503; #3875 follows it, the outcome stays open.
+
+2026-10-20, decided on internal issue 38652, comment 6301541135: part 1 (the status classes) class 5 upstream PR in flight, agentgateway/agentgateway#3875 after agent-substrate/substrate#2706; part 2 (the sanitized body) class 1 drop, not proposed, since #2162 goes the same direction and supersedes it; part 3 (local 500 errors answered as Unavailable) class 5 upstream PR, uncapped; first step the part-3 PR, agentgateway/agentgateway; branch `upstream/substrate-egress-errors` @ `1195ff7f` for #3875, new branch for part 3; test `credential_provider_errors_preserve_availability_semantics` and `substrate_egress_replaces_only_requested_credentials`; depends on no theme; owner unassigned; draft: internal issue 38652, comment 6301547510.

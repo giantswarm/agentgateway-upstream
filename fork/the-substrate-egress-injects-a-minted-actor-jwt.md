@@ -11,8 +11,8 @@ commits:
   - 'fix(substrate): mint through Control.MintActorJwt, the name Substrate serves'
 upstream:
   outcome: superseded
-  refs: [agent-substrate/substrate#1960, agent-substrate/substrate#2135, agent-substrate/substrate#2141, agent-substrate/substrate#2421, agentgateway/agentgateway#3985, giantswarm/substrate#495]
-  exit: 're-pin onto #3985'
+  refs: [agent-substrate/substrate#1960, agentgateway/agentgateway#3985, giantswarm/substrate#495]
+  exit: "drops at the re-pin onto a commit containing 38a50f69, the Substrate line serving MintActorJwt (1.17)"
 depends_on: [agent-substrate/substrate#1960]
 verified: 2026-10-20
 ---
@@ -35,3 +35,5 @@ the `feat(substrate): inject an actor JWT minted through Control.MintActorJwt` c
 [giantswarm/substrate#495](https://github.com/giantswarm/substrate/pull/495) (merged 2026-10-20, in `v1.17.0-rc.1`) renames the Substrate line's RPC to `MintActorJwt`, as agent-substrate/substrate#2520 named it on `main`. From the Substrate release that carries it, ate-api answers this line's `/ateapi.Control/MintActorJWT` with `Unimplemented`, which the egress denies with 500, so the egress's caller moves to `MintActorJwt` in the same release window and the Substrate chart's `images.agentgateway` moves to that release.
 
 The `fix(substrate): mint through Control.MintActorJwt, the name Substrate serves` commit names the call `MintActorJwt` again, the name upstream and the Substrate line from 1.17 serve, so the line and #3985 call the same path.
+
+2026-10-20, decided on internal issue 38652, comment 6301541135: class 2 upstream has it; destination agentgateway/agentgateway#3985; first step none; branch none; test `substrate_egress_replaces_only_requested_credentials`; owner unassigned.
