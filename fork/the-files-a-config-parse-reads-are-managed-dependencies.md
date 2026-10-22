@@ -10,8 +10,17 @@ upstream:
   outcome: superseded
   refs: [giantswarm/agentgateway-upstream#20, agentgateway/agentgateway#3751, agentgateway/agentgateway#3794, agentgateway/agentgateway#3863]
   exit: drops at re-pin onto 0a8476fe
+  class: 2
+  destination: 'agentgateway/agentgateway#3863 (0a8476fe); our #3794 closed in its favour'
+  first_step: 'none; the same re-pin as a-managed-file-resource-is-read-from-disk-on-every-fetch'
+  source: n/a
+  test: 'the fork''s projected-volume rotation test passes on the re-pin without the patch'
+  recheck: 'at the re-pin'
+  owner: unassigned
+  draft: ""
+  decision: issuecomment-6301335159
 depends_on: [a-managed-file-resource-is-read-from-disk-on-every-fetch]
-verified: 2026-10-19
+verified: 2026-10-20
 ---
 # The files a config parse reads are managed dependencies
 
@@ -28,3 +37,5 @@ a backend TLS file referenced only under a Substrate policy's `policies.backendT
 [agentgateway#3751](https://github.com/agentgateway/agentgateway/issues/3751) (issue, 2026-10-02): on upstream `main` @ `c7ac602e` a `backendTLS` file under a backend reference's own `policies` (an `extAuthz` target, a Substrate policy) is not tracked, reproduced with a rotation test against a route backend's as control; our PR [agentgateway#3794](https://github.com/agentgateway/agentgateway/pull/3794) (branch `upstream/parse-time-file-dependencies`, `4bf67110`) was closed in favour of [agentgateway#3863](https://github.com/agentgateway/agentgateway/pull/3863), merged 2026-10-08 as `0a8476fe` with our sign-offs; #3751 was closed as completed on 2026-10-13 (fixed by #3863). Upstream's design is the better one: the serde hook reads through the managed fetcher inside the load's scope (`parse_fetcher`), one read whose bytes are the ones cached and watched, where this patch reads each file twice (files-only, then managed) and a rotation between the two reads leaves the old certificate in the config with the new bytes in the cache, so no later event notifies. The `refresh_file` re-arm is no upstream gap: upstream has no periodic file re-read (files carry `next_refresh: None`), the 60 s poll is #20's own. Drops whole, with the previous row, at the re-pin onto a commit containing `0a8476fe`
 
 `611793c3` (the commit of pull request #23, rebase-merged onto `giantswarm` as one commit; at the 2026-09-24 re-pin its parse hook was re-seated on upstream's new YAML parser, #3639; replayed clean at the 2026-10-05 re-pin; in release 2.1.2)
+
+2026-10-20: decided in the version-pins theme review (decision issuecomment-6301335159): class 2 upstream-has-it, superseded by agentgateway#3863; drops with the previous row at the re-pin onto a commit containing `0a8476fe`.
