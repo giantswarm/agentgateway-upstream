@@ -2,7 +2,7 @@ module github.com/agentgateway/agentgateway
 
 go 1.27.0
 
-toolchain go1.27.2
+toolchain go1.27.3
 
 replace github.com/agentgateway/agentgateway/api => ./api
 
