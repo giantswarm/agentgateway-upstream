@@ -1,0 +1,31 @@
+# Fork (giantswarm/agentgateway-upstream): a pull request closes no issue by
+# keyword (.github/scripts/fork-closing-keywords.sh). A workflow of its own, so
+# an edit of the description re-runs this check alone, not the suites.
+name: fork-closing-keywords
+on:
+  pull_request:
+    branches: [giantswarm]
+    types: [opened, synchronize, reopened, edited]
+permissions:
+  contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  closing-keywords:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      with:
+        persist-credentials: false
+        # HEAD^1 of the merge is the line, HEAD^2 the pull request's head.
+        fetch-depth: 0
+    - name: Fixture runs of the check
+      run: .github/scripts/fork-closing-keywords-test.sh
+    - name: No issue closed by keyword
+      run: |
+        {
+          jq -r '.pull_request.title, (.pull_request.body // "")' "${GITHUB_EVENT_PATH}"
+          git log --format=%B HEAD^1..HEAD^2
+        } | .github/scripts/fork-closing-keywords.sh
