@@ -7,11 +7,11 @@ status: carried
 commits:
   - 'fix: refetch remote JWKS on unknown key id before rejecting'
 upstream:
-  outcome: open
+  outcome: fork-only
   refs: [agentgateway/agentgateway#2798, agentgateway/agentgateway#3037, giantswarm/agentgateway-upstream#75]
-  exit: 'lands or dies with #3037'
+  exit: 'follows the answer on agentgateway#2798; drops at the re-pin onto the upstream fix for local configuration'
 depends_on: []
-verified: 2026-10-19
+verified: 2026-10-24
 ---
 # A remote JWKS is refetched on an unknown key id, local configuration
 
@@ -28,3 +28,5 @@ after an issuer's signing-key rotation, tokens signed with the new key were refu
 [agentgateway#3037](https://github.com/agentgateway/agentgateway/pull/3037) (a third party's pull request, open on 2026-10-13 with no activity since 2026-08-15) for [agentgateway#2798](https://github.com/agentgateway/agentgateway/issues/2798); falls away at the re-pin onto the first upstream commit containing it
 
 the `fix: refetch remote JWKS on unknown key id before rejecting` commit, cherry-picked with its author's sign-off from agentgateway#3037
+
+agentgateway#3037 was closed unmerged by a maintainer on 2026-10-20, without a review or a comment, together with other stale pull requests that evening. On 2026-10-24 we asked on agentgateway#2798 where the refetch belongs (controller on a kid-miss hint, or the data plane itself); the commit is carried until that answer lands upstream
