@@ -7,11 +7,11 @@ status: carried
 commits:
   - 'fix(mcp): drop a stateful session''s pin when its endpoint is gone'
 upstream:
-  outcome: to-file
-  refs: []
-  exit: file as a PR; narrow the new ProxyError variant to MCP first
+  outcome: open
+  refs: [agentgateway/agentgateway#4132]
+  exit: "agentgateway/agentgateway#4132 merged and in the pin"
 depends_on: []
-verified: 2026-10-19
+verified: 2026-10-26
 ---
 # A stateful MCP session leaves a pinned endpoint that is gone
 
@@ -28,3 +28,5 @@ A stateful MCP session through a Service-backed target stayed pinned to the pod 
 to file — prepared in the fork: branch `upstream/mcp-unpin-gone-endpoint`; upstream `main` @ `884c2e6e` keeps the pin for the life of the session (`McpHttpClient` in `mcp/upstream/client.rs`). Drops at the re-pin onto a commit containing it
 
 the `fix(mcp): drop a stateful session's pin when its endpoint is gone` commit
+
+2026-10-26: filed upstream on 2026-10-24 as agentgateway/agentgateway#4132 (draft, branch `upstream/mcp-session-unpin` @ `9188c95d`): 404 only when the pinned endpoint left the Service; a connect failure keeps its status. The code comments and commit message are rewritten by hand before it leaves draft.

@@ -8,11 +8,11 @@ commits:
   - 'feat(substrate): a policy denial names the destination and where it is allowed'
   - 'test(substrate): a denial''s status line carries its message'
 upstream:
-  outcome: to-file
-  refs: []
-  exit: 'the upstream change merged and in the pin'
+  outcome: open
+  refs: [agentgateway/agentgateway#4131]
+  exit: "agentgateway/agentgateway#4131 settles the refusal reason; the change that implements it merged and in the pin"
 depends_on: []
-verified: 2026-10-19
+verified: 2026-10-26
 ---
 # A policy denial names the destination and where it is allowed
 
@@ -36,3 +36,5 @@ tell which host to declare. The actor named the destination itself, so the body 
 ## History
 
 Upstream: to file — prepared in the fork: branch `upstream/egress-denial-names-host-v3` (DCO signed off, with the test change; `upstream/egress-denial-names-host` and `-v2` are superseded and not filed).
+
+2026-10-26: the refusal reason went upstream as the issue agentgateway/agentgateway#4131 on 2026-10-24 (extend the ingress `ate-error-reason` header to the egress, with fixed values); this row's destination echo is its optional second ask. The branch `upstream/egress-denial-names-host-v3` is dead.
