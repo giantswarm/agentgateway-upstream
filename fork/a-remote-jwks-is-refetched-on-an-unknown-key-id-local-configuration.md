@@ -7,11 +7,11 @@ status: carried
 commits:
   - 'fix: refetch remote JWKS on unknown key id before rejecting'
 upstream:
-  outcome: fork-only
+  outcome: open
   refs: [agentgateway/agentgateway#2798, agentgateway/agentgateway#3037, giantswarm/agentgateway-upstream#75]
   exit: 'follows the answer on agentgateway#2798; drops at the re-pin onto the upstream fix for local configuration'
 depends_on: []
-verified: 2026-10-24
+verified: 2026-10-27
 ---
 # A remote JWKS is refetched on an unknown key id, local configuration
 
