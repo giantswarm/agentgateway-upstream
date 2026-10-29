@@ -8,10 +8,10 @@ commits:
   - 'fix(substrate): answer a credential provider''s failure by its class'
 upstream:
   outcome: open
-  refs: [agent-substrate/substrate#2555, agent-substrate/substrate#2706, agentgateway/agentgateway#3875, agentgateway/agentgateway#2162, agentgateway/agentgateway#3524]
-  exit: "agentgateway/agentgateway#3875 merged after agent-substrate/substrate#2706: re-seated without the body sanitizing; the ServiceNotFound part merged on its own: dropped; re-check each re-pin"
+  refs: [agent-substrate/substrate#2555, agent-substrate/substrate#2706, agentgateway/agentgateway#3875, agentgateway/agentgateway#2162, agentgateway/agentgateway#3524, agentgateway/agentgateway#4226]
+  exit: "agentgateway/agentgateway#3875 merged after agent-substrate/substrate#2706: re-seated without the body sanitizing; agentgateway/agentgateway#4226 merged: the local-500 part dropped; re-check each re-pin"
 depends_on: [agent-substrate/substrate#2706, agentgateway/agentgateway#2162]
-verified: 2026-10-26
+verified: 2026-10-29
 ---
 # A credential provider's failure is answered by its class
 
@@ -36,3 +36,5 @@ split in three for upstream; drops when each part has landed or been declined. (
 2026-10-20, decided on internal issue 38652, comment 6301541135: part 1 (the status classes) class 5 upstream PR in flight, agentgateway/agentgateway#3875 after agent-substrate/substrate#2706; part 2 (the sanitized body) class 1 drop, not proposed, since #2162 goes the same direction and supersedes it; part 3 (local 500 errors answered as Unavailable) class 5 upstream PR, uncapped; first step the part-3 PR, agentgateway/agentgateway; branch `upstream/substrate-egress-errors` @ `1195ff7f` for #3875, new branch for part 3; test `credential_provider_errors_preserve_availability_semantics` and `substrate_egress_replaces_only_requested_credentials`; depends on no theme; owner unassigned; draft: internal issue 38652, comment 6301547510.
 
 2026-10-26: agentgateway/agentgateway#2162 merged on 2026-10-21 as `be8864a88`, which supersedes part 2 (the sanitized body). Part 1 still waits on #3875 after agent-substrate/substrate#2706, so the outcome stays open.
+
+2026-10-29: part 3 filed as agentgateway/agentgateway#4226 by fiunchinho from `upstream/grpc-local-errors-unavailable` (`96476c07`, +7/-1 in `proxy/mod.rs`): `ServiceNotFound`, `InvalidBackendType` and `BackendDoesNotExist` join the `NoValidBackends` arm of `proxy_error_to_grpc_status` and answer gRPC `Unavailable`; HTTP callers keep 500; the gRPC mapping test table covers the three. The description is human-written, as the project's generative AI policy asks. Part 1 still waits on #3875, so the outcome stays open.
