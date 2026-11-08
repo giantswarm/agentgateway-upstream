@@ -27,4 +27,4 @@ verified: 2026-11-08
 
 `git cherry-pick -x` of upstream `a6698884` (agentgateway#3978, merged 2026-10-14, after the v1.6.0 pin). Falls away at the re-pin onto a commit that contains it.
 
-It closes the flake: `controller-conformance` passed at the first attempt in all 50 runs of the pull-request workflow that completed between the merge (#122, 2026-10-20) and 2026-11-08, with no rerun.
+It closes the flake: `controller-conformance` passed at the first attempt in all 50 runs of the pull-request workflow that completed between the merge of pull request #122 (2026-10-20) and 2026-11-08, with no rerun.
