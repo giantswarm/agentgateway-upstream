@@ -8,10 +8,10 @@ commits:
   - 'build(deps): avoid depending on GIE conformance in go.mod'
 upstream:
   outcome: merged
-  refs: [agentgateway/agentgateway#3978, kubernetes-sigs/gateway-api#5110]
+  refs: [agentgateway/agentgateway#3978, kubernetes-sigs/gateway-api#5110, giantswarm/agentgateway-upstream#45]
   exit: next re-pin
 depends_on: []
-verified: 2026-10-20
+verified: 2026-11-08
 ---
 # The conformance suite runs gateway-api conformance v1.6.3
 
@@ -21,8 +21,10 @@ verified: 2026-10-20
 
 ## Reason
 
-`TLSRouteInvalidBackendRefNonexistent` failed `controller-conformance` three times between 2026-10-19 and 2026-10-20, once on a push to `giantswarm`. Conformance v1.6.1's `MakeTLSConnectionAndExpectEventuallyConnectionRejection` dials with the test's context and no deadline of its own, so a first dial to a Gateway address that is not serving yet hangs for the whole `MaxTimeToConsistency` (30s) and is never retried. kubernetes-sigs/gateway-api#5110 bounds each attempt by `RequestTimeout`; it is in v1.6.2 and later.
+`TLSRouteInvalidBackendRefNonexistent` failed `controller-conformance` on 2026-10-02 and 2026-10-08, then three times between 2026-10-19 and 2026-10-20, once on a push to `giantswarm`. Conformance v1.6.1's `MakeTLSConnectionAndExpectEventuallyConnectionRejection` dials with the test's context and no deadline of its own, so a first dial to a Gateway address that is not serving yet hangs for the whole `MaxTimeToConsistency` (30s) and is never retried. kubernetes-sigs/gateway-api#5110 bounds each attempt by `RequestTimeout`; it is in v1.6.2 and later.
 
 ## History
 
 `git cherry-pick -x` of upstream `a6698884` (agentgateway#3978, merged 2026-10-14, after the v1.6.0 pin). Falls away at the re-pin onto a commit that contains it.
+
+It closes the flake: `controller-conformance` passed at the first attempt in all 50 runs of the pull-request workflow that completed between the merge of pull request #122 (2026-10-20) and 2026-11-08, with no rerun.
