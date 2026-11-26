@@ -14,6 +14,7 @@ commits:
   - 'ci: pin giantswarm/architect orb 10.6.3'
   - 'ci: pin giantswarm/architect orb 10.10.0'
   - 'ci(sync): land a checked sync/** candidate on giantswarm instead of pushing an unchecked rebase'
+  - 'ci(sync): fetch upstream''s tags into refs/tags/upstream'
   - 'ci(fork): the ledger cites public repositories only'
   - 'ci(fork): drop the throwaway line'
   - 'chore: declare Renovate off on the fork line'
@@ -44,3 +45,5 @@ the line's CI, publishing and sync. Three commit pairs on the branch cancel each
 not for upstream; ours to keep
 
 the `giantswarm` branch history
+
+2026-11-26: the sync workflow fetches upstream's tags into `refs/tags/upstream/` (`--no-tags`) and resolves the pin there, so upstream's release tags and the line's own (`v2.x`, `v3.x`) never share a name.
