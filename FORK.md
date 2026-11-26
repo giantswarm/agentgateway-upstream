@@ -31,7 +31,7 @@ the branch that was not a pull request or a re-pin), then adding the fork's file
 | Upstream commit | **`v1.6.0`** (tag commit `ea560864`, "Update model catalog (#3750)", 2026-10-02; 316 commits past v1.5.0). A release tag again: v1.6.0 is upstream's first stable release since v1.5.0 (2026-08-27) and the first that contains `8dba3989` (the egress credential injection the Substrate line's pin needs, see "Convergence"), `3528a428` (the previous pin), and the fixes that supersede two carried patches (#3723 `2353a2c1`, #3704 `f6ceca24`). It also contains agentgateway#3677 (`9e78d1da`, 2026-09-26): the egress authorizes an actor from the `spiffe://substrate-actor.local/ateom-for-actor/<atespace>/<actor>` certificate URI that agent-substrate/substrate#1809 (`8d6be5fb`) introduced and no longer reads the `ActorIdentity` extension, and credential providers receive `spiffe://substrate-actor.local/actor/<atespace>/<actor>`. |
 | Why this one | The line returns to a release tag at the first stable release that contains `8dba3989`, as the previous pin's row promised, and v1.6.0 is that release. The packaging chart `giantswarm/agentgateway` (the platform's controller and data plane) follows this release; its vendored chart can move to upstream's v1.6.0 chart at the same time (see "Consumers"). The Substrate line follows it since its own re-pin past agent-substrate/substrate#1809 (`7172778d` on giantswarm/substrate, 2026-10-05, the router and egress on `2.3.0`; its chart pins `2.3.5` on 2026-10-13): a release on this pin refuses the CONNECT of an actor whose certificate carries only the old `spiffe://substrate-actor.local/atespace/<atespace>/actor/<actor>` URI, which #3677 no longer reads. |
 | When it moves | with the consumers, proven in agentlab first — see "Re-pin". Not on a schedule. Previous pins: v1.5.0 (2026-09-10 → 2026-09-14, releases `v1.5.1-gs.1`–`gs.3`), `main` @ `c1d24607` (2026-09-14 → 2026-09-22, releases `v1.5.1-gs.4`, `v1.5.1-gs.5`, `2.0.0`), `main` @ `08f4563b` (2026-09-22 → 2026-09-24, releases `2.1.0`, `2.1.1`, `2.1.2`), `main` @ `3528a428` (2026-09-24 → 2026-10-05, releases `2.2.0`, `2.2.1`, `2.2.2`, `2.2.3-rc.1`); this pin's releases start at `2.3.0`. |
-| Derived how | The pin itself is `git merge-base giantswarm main` (the mirror — after a re-pin onto an upstream commit newer than the last mirror run, `main` lags the pin until the next weekly run and the merge-base is the older commit; this row is authoritative). The upstream release it corresponds to is `git describe --tags --abbrev=0 --match 'v[0-9]*' --exclude '*-*' "$(git merge-base giantswarm main)"` with upstream's tags fetched — the nearest upstream release at or below the pin, v1.6.0 today. `git describe` runs at the merge-base, not at `giantswarm`, so the line's own stable tags (`v2.0.0`, …; see "Publishing") never count. The line's versions are decoupled from upstream's; the pin is documented here and stamped on every published index as the annotation `io.giantswarm.upstream.version`. |
+| Derived how | The pin itself is `git merge-base giantswarm main` (the mirror — after a re-pin onto an upstream commit newer than the last mirror run, `main` lags the pin until the next weekly run and the merge-base is the older commit; this row is authoritative). The upstream release it corresponds to is `git describe --tags --abbrev=0 --match 'upstream/v[0-9]*' --exclude 'upstream/*-*' "$(git merge-base giantswarm main)"` with upstream's tags fetched into their own namespace (`git fetch --no-tags upstream '+refs/tags/v*:refs/tags/upstream/v*'`) — the nearest upstream release at or below the pin, `upstream/v1.6.0` today. Upstream's tags never land in `refs/tags/v*`, where the line's own releases (`v2.0.0`, …; see "Publishing") live, so a tag of one side never shadows the other's, whichever versions either side reaches. The line's versions are decoupled from upstream's; the pin is documented here and stamped on every published index as the annotation `io.giantswarm.upstream.version`. |
 
 ### Convergence with the Substrate line
 
@@ -138,7 +138,9 @@ itself (`git rebase` drops already-applied patches), and its file in `fork/` is 
 1. Decide the pin with the consumers: the packaging chart's vendored chart version and the Substrate line's router
    protocol (see "Convergence") must both be served by it. The three lines move in one order — this line first, then
    the Substrate line (its chart pins this line's release), then the kagent line (its `go.mod` pins Substrate).
-2. Run **Actions → sync-upstream → Run workflow** with `pin` = the tag or commit (for example `v1.6.0`). The workflow
+2. Run **Actions → sync-upstream → Run workflow** with `pin` = the tag as upstream names it or a commit (for example
+   `v1.6.0`; the workflow reads upstream's tags from `refs/tags/upstream/`, so a line tag of the same name never
+   counts). The workflow
    mirrors `main`, rebases the carried patches onto the pin, builds the controller as a smoke, pushes the result as the
    candidate `sync/<date>-<pin>` and opens a pull request against `giantswarm` that records the line head it was
    replayed from. The candidate's push runs `ci-ok` (`pull_request.yml` runs on `sync/**` pushes — the pull request
@@ -214,9 +216,9 @@ Building a candidate by hand (a workstation, upstream as a remote) ends at the c
 above lands it:
 
 ```sh
-git fetch upstream main 'refs/tags/v*:refs/tags/v*'
+git fetch --no-tags upstream main '+refs/tags/v*:refs/tags/upstream/v*'
 git checkout -b sync/$(date -u +%Y%m%d)-v1.6.0 origin/giantswarm
-git rebase --onto v1.6.0 "$(git merge-base origin/giantswarm upstream/main)"   # new pin, old pin (a tag or a main commit)
+git rebase --onto refs/tags/upstream/v1.6.0 "$(git merge-base origin/giantswarm upstream/main)"   # new pin, old pin (a tag or a main commit)
 go build ./... && make lint
 git push origin HEAD                                                            # ci-ok on the candidate
 ```
