@@ -13,10 +13,10 @@ commits:
   - 'fix(substrate): tcp rules decide an actor stream that sends nothing'
 upstream:
   outcome: to-file
-  refs: [giantswarm/substrate#164]
-  exit: file as a PR after the Substrate API's tcp rule is filed upstream
+  refs: [giantswarm/substrate#164, agentgateway/agentgateway#4093]
+  exit: "an issue on agent-substrate/substrate proposes `EgressRule.tcp = 4` (`TCPRule`) for the `substrate.ateapi.v1` egress API, then the agentgateway relay goes upstream as one pull request; drops at the re-pin onto the release that contains it"
 depends_on: [giantswarm/substrate#164]
-verified: 2026-10-19
+verified: 2026-11-26
 ---
 # The Substrate egress relays TCP a tcp rule allows
 
@@ -35,3 +35,5 @@ Drops at the re-pin onto an upstream commit that contains the upstream change.
 to file — prepared in the fork: branch `upstream/substrate-egress-tcp-rule-v3` (every address of the gateway local, both families). Branches `upstream/substrate-egress-tcp-rule` and `upstream/substrate-egress-tcp-rule-v2` are superseded by it and are not filed. It follows the Substrate API's `tcp` rule, prepared on the Substrate line's branch `upstream/egress-tcp-rule` ([giantswarm/substrate#164](https://github.com/giantswarm/substrate/issues/164)).
 
 the `feat(substrate): relay TCP a tcp rule allows` commit on `giantswarm`
+
+2026-11-26, re-pin onto upstream v1.7.0: carried, the rule kept at `EgressRule.tcp = 4` (`TCPRule`, free in v1.7.0 and in kagent-dev/substrate v1.0.1). Re-seated on agentgateway#4093 (`42c0902c`): a TLS destination no rule covers is refused at the ClientHello, so `EgressTlsMode` has no `InterceptDenied` and a stream reaches the tcp decision only when it carries no TLS mode. Without this carry a v1.7.0 egress skips a tcp-only rule as an invalid union and refuses the stream.

@@ -5,13 +5,13 @@ theme: credential-injection
 category: feature
 status: carried
 commits:
-  - 'fix(substrate): answer a credential provider''s failure by its class'
+  - 'substrate: answer a credential provider failure by its class'
 upstream:
   outcome: open
-  refs: [agent-substrate/substrate#2555, agent-substrate/substrate#2706, agentgateway/agentgateway#3875, agentgateway/agentgateway#2162, agentgateway/agentgateway#3524, agentgateway/agentgateway#4226]
-  exit: "agentgateway/agentgateway#3875 merged after agent-substrate/substrate#2706: re-seated without the body sanitizing; agentgateway/agentgateway#4226 merged: the local-500 part dropped; re-check each re-pin"
-depends_on: [agent-substrate/substrate#2706, agentgateway/agentgateway#2162]
-verified: 2026-10-29
+  refs: [agentgateway/agentgateway#3875, agentgateway/agentgateway#2162, agentgateway/agentgateway#4226, agentgateway/agentgateway#3524, agent-substrate/substrate#2555, agent-substrate/substrate#2706]
+  exit: "agentgateway/agentgateway#3875 merged and in the pin; re-check at each re-pin"
+depends_on: []
+verified: 2026-11-26
 ---
 # A credential provider's failure is answered by its class
 
@@ -38,3 +38,5 @@ split in three for upstream; drops when each part has landed or been declined. (
 2026-10-26: agentgateway/agentgateway#2162 merged on 2026-10-21 as `be8864a88`, which supersedes part 2 (the sanitized body). Part 1 still waits on #3875 after agent-substrate/substrate#2706, so the outcome stays open.
 
 2026-10-29: part 3 filed as agentgateway/agentgateway#4226 by fiunchinho from `upstream/grpc-local-errors-unavailable` (`96476c07`, +7/-1 in `proxy/mod.rs`): `ServiceNotFound`, `InvalidBackendType` and `BackendDoesNotExist` join the `NoValidBackends` arm of `proxy_error_to_grpc_status` and answer gRPC `Unavailable`; HTTP callers keep 500; the gRPC mapping test table covers the three. The description is human-written, as the project's generative AI policy asks. Part 1 still waits on #3875, so the outcome stays open.
+
+2026-11-26, re-pin onto upstream v1.7.0: the line's own commit is replaced by a `git cherry-pick -x` of the head of agentgateway/agentgateway#3875 (`b79a769d`), the upstreamable shape, which applies to v1.7.0 with one conflict (`credential_secret` returns a `ProxyResponse` there). The classes are now #3875's: `NotFound`, `PermissionDenied`, `FailedPrecondition` and `InvalidArgument` 403; `Unavailable`, `DeadlineExceeded` and `ResourceExhausted` 503; any other status (`Unauthenticated` among them), an unusable secret and an invalid header value 502. The body sanitizing and the `FetchSecret` contract comment leave: agentgateway#2162 (`be8864a8`, in v1.7.0) answers every Substrate egress error with a fixed external message and keeps the status for the logs (`EXPOSE_ERROR_DETAILS` shows it). agentgateway#4226 (local 500 errors as gRPC `Unavailable`) merged on 2026-11-06 after v1.7.0 and was never carried here. agent-substrate/substrate#2706 closed unmerged on 2026-11-17; the Substrate contract stays agent-substrate/substrate#2555 (open).

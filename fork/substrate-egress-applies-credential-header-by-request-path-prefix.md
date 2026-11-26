@@ -8,10 +8,10 @@ commits:
   - 'fix(substrate): apply a credential header by its request path prefix'
 upstream:
   outcome: fork-only
-  refs: [agent-substrate/substrate#2515, agent-substrate/substrate#2541, agentgateway/agentgateway#3985]
-  exit: "with giantswarm/substrate:egress-scopes-credential-header-to-request-path-prefix (2026-11-17): re-seated as the agentgateway half of the shape Substrate takes, or dropped at the following re-pin"
-depends_on: [agent-substrate/substrate#2541, giantswarm/substrate:egress-scopes-credential-header-to-request-path-prefix]
-verified: 2026-10-20
+  refs: [agent-substrate/substrate#2541, agent-substrate/substrate#2515, agentgateway/agentgateway#3985]
+  exit: "agent-substrate/substrate#2541 settles the field in Substrate's `substrate.ateapi.v1` egress API, then the agentgateway half goes upstream as one pull request with the two follow-ups; drops at the re-pin onto the release that contains it, or when the field is refused upstream and the Substrate line stops sending it"
+depends_on: [agent-substrate/substrate#2541]
+verified: 2026-11-26
 ---
 # The Substrate egress applies a credential header by its request path prefix
 
@@ -34,3 +34,5 @@ the `fix(substrate): apply a credential header by its request path prefix` commi
 [agentgateway#3985](https://github.com/agentgateway/agentgateway/pull/3985) (merged 2026-10-15 as `38a50f69`) adds `CredentialHeader` field 4 (`actor_jwt`) but no `path_prefix`, so it is the base this change rebases on, not its exit, and the outcome stays to-file (checked 2026-10-20).
 
 2026-10-20, decided on internal issue 38652, comment 6301541135: class 6 fork-only, follower of the Substrate path_prefix row; destination agentgateway/agentgateway, the dataplane half of whichever shape Substrate takes (a prefix comparison in apply_effects under the scheme-keyed entry); first step after Substrate answers; branch `upstream/substrate-egress-path-prefix` @ `efb30d4f`; test `substrate_egress_replaces_only_requested_credentials`; depends on no theme; re-check 2026-11-17; owner unassigned; draft: internal issue 38652, comment 6301547887.
+
+2026-11-26, re-pin onto upstream v1.7.0: carried, the field kept at `CredentialHeader.path_prefix = 5` beside v1.7.0's `actor_jwt = 4` (field 5 is free in kagent-dev/substrate v1.0.1's `substrate.ateapi.v1` too, so the Substrate line sends it at the same number). The 2026-11-17 exit lapsed with agent-substrate/substrate#2515 closed unmerged for inactivity (2026-11-20); the issue agent-substrate/substrate#2541 stays open with a second use case (one path of a host taking another token), and the carry stays in upstreamable shape until it is answered.

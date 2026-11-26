@@ -11,7 +11,7 @@ upstream:
   refs: [agentgateway/agentgateway#4132]
   exit: "agentgateway/agentgateway#4132 merged and in the pin"
 depends_on: []
-verified: 2026-10-26
+verified: 2026-11-26
 ---
 # A stateful MCP session leaves a pinned endpoint that is gone
 
@@ -30,3 +30,5 @@ to file — prepared in the fork: branch `upstream/mcp-unpin-gone-endpoint`; ups
 the `fix(mcp): drop a stateful session's pin when its endpoint is gone` commit
 
 2026-10-26: filed upstream on 2026-10-24 as agentgateway/agentgateway#4132 (draft, branch `upstream/mcp-session-unpin` @ `9188c95d`): 404 only when the pinned endpoint left the Service; a connect failure keeps its status. The code comments and commit message are rewritten by hand before it leaves draft.
+
+2026-11-26, re-pin onto upstream v1.7.0: replayed clean. agentgateway/agentgateway#4132 open. Upstream `main` past v1.7.0 has agentgateway#4532 (`5e2e8da4`, MCP session upstreams rebuilt on each request) and #4437 (`d4b3790f`), which may cover this at the next re-pin onto a release that contains them.

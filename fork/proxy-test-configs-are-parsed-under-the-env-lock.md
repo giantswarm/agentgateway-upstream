@@ -11,7 +11,7 @@ upstream:
   refs: []
   exit: file in the test-flake batch
 depends_on: []
-verified: 2026-10-19
+verified: 2026-11-26
 ---
 # Proxy test configs are parsed under the env lock
 
@@ -28,3 +28,5 @@ verified: 2026-10-19
 to file — prepared in the fork: branch `upstream/oauth-test-xds-env-lock` (`3dfcc6b0`, on the mirror `main` @ `955d56fa`). Drops at the re-pin onto a commit containing it
 
 the `fix(test): parse proxy test configs under the env lock` commit, from [giantswarm/agentgateway-upstream#95](https://github.com/giantswarm/agentgateway-upstream/issues/95)
+
+2026-11-26, re-pin onto upstream v1.7.0: replayed clean. Still to file.

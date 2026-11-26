@@ -9,9 +9,9 @@ commits:
 upstream:
   outcome: fork-only
   refs: [agent-substrate/substrate#2541]
-  exit: "with substrate-egress-applies-credential-header-by-request-path-prefix: drops in both outcomes"
+  exit: "leaves with substrate-egress-applies-credential-header-by-request-path-prefix, folded into its upstream pull request"
 depends_on: [substrate-egress-applies-credential-header-by-request-path-prefix]
-verified: 2026-10-20
+verified: 2026-11-26
 ---
 # The Substrate egress path-prefix escape forms are tested
 
@@ -30,3 +30,5 @@ to file — prepared in the fork: branch [`upstream/substrate-egress-path-prefix
 the `test(substrate): test the path-prefix escape forms of replace_headers_for` commit, a `cherry-pick -x` of the upstream branch's commit, from [giantswarm/agentgateway-upstream#97](https://github.com/giantswarm/agentgateway-upstream/issues/97)
 
 2026-10-20, decided on internal issue 38652, comment 6301541135: class 6 fork-only, follower, tests of the path form only; destination none of its own; first step none; branch `upstream/substrate-egress-path-prefix-escapes` @ `2b4cb408`; test the escape table; re-check 2026-11-17; owner unassigned.
+
+2026-11-26, re-pin onto upstream v1.7.0: carried with the parent; the encoded-slash integration test is re-seated on v1.7.0's credential test (its path now names the port and the outer protocol).

@@ -9,9 +9,9 @@ commits:
 upstream:
   outcome: fork-only
   refs: [agent-substrate/substrate#1562, agent-substrate/substrate#2105, agentgateway/agentgateway#3674, giantswarm/agentgateway-upstream#86, giantswarm/substrate#445, giantswarm/substrate#80]
-  exit: Substrate error-code contract upstream (post draft D on as#1562) or drop the directive
+  exit: "Substrate answers a terminal resume refusal with the `ate.dev`/`TERMINAL_STATE` ErrorInfo v1.7.0 already reads (agent-substrate/substrate#1562), and the Substrate line sends it; or the Substrate line drops the directive"
 depends_on: [giantswarm/substrate:ateapi-crashed-actor-refusal-not-resumable]
-verified: 2026-10-19
+verified: 2026-11-26
 ---
 # A resume refusal marked not resumable is answered at once
 
@@ -28,3 +28,5 @@ Substrate refuses to resume an actor whose ActorTemplate lost its golden snapsho
 not for upstream as is. Upstream Substrate removed the directive's only producer, the `onResume.fromData` golden resolution (agent-substrate/substrate#2105, `6a35150e`), and the Substrate line dropped #80 at its 2026-10-08 re-pin; giantswarm/substrate `release-1.3` still sends `GOLDEN_SNAPSHOT_UNAVAILABLE` (`internal/ateerrors`), and since [giantswarm/substrate#445](https://github.com/giantswarm/substrate/pull/445) (merged 2026-10-15) the line's ate-api sends the directive again on a crashed actor's resume refusal (`ACTOR_CRASHED`), so the patch stays while the line produces the directive ([#86](https://github.com/giantswarm/agentgateway-upstream/issues/86)). The general problem is real on upstream `main` @ `85d1f087` (`retryable_while_parked` in `ingress.rs` parks `FailedPrecondition` for the whole budget), but a Giant Swarm-only ErrorInfo key is no contract; the proper fix is Substrate's codes (a transient conflict answered `ABORTED`, `FAILED_PRECONDITION` kept for refusals that need a state change), raised with agent-substrate first (agent-substrate/substrate#1562 is the open issue; nothing of ours is posted there on 2026-10-19), after which agentgateway, and Substrate's own atenet resumer, stop parking `FailedPrecondition`. Branch [`upstream/substrate-resume-not-resumable`](https://github.com/giantswarm/agentgateway-upstream/tree/upstream/substrate-resume-not-resumable) is not filed; agentgateway#3674 merged 2026-10-08 (`73b52e38`) and no longer blocks anything
 
 `5e124eb3` ([#29](https://github.com/giantswarm/agentgateway-upstream/pull/29), replayed clean at the 2026-10-05 re-pin)
+
+2026-11-26, re-pin onto upstream v1.7.0: re-seated on v1.7.0's ingress, which reads its own ErrorInfo (domain `ate.dev`, reason `TERMINAL_STATE` stops the parked retries, the reason is sent as the `ate-error-reason` header) but answers such a refusal 503 and, to a gRPC caller, `UNAVAILABLE`. The directive is now read with `tonic_types` (`get_error_details_vec`), like upstream's `status_reason`, and checked before upstream's retry rule; `SubstrateResumeRefused` keeps the control plane's code and details, and its message is the external message (agentgateway#2162 masks the other ingress errors). Nothing in kagent-dev/substrate v1.0.1 sends either `TERMINAL_STATE` or the directive: the Substrate line's own carry decides whether this stays.

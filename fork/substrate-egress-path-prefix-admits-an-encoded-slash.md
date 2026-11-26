@@ -9,9 +9,9 @@ commits:
 upstream:
   outcome: fork-only
   refs: [agent-substrate/substrate#2541]
-  exit: "with substrate-egress-applies-credential-header-by-request-path-prefix: drops in both outcomes"
+  exit: "leaves with substrate-egress-applies-credential-header-by-request-path-prefix, folded into its upstream pull request"
 depends_on: [substrate-egress-applies-credential-header-by-request-path-prefix, substrate-egress-path-prefix-escapes-are-tested, giantswarm/substrate:egress-path-prefix-admits-encoded-slash]
-verified: 2026-10-20
+verified: 2026-11-26
 ---
 # A path-prefixed credential header applies to a path with an encoded slash
 
@@ -32,3 +32,5 @@ to file — prepared in the fork: branch [`upstream/substrate-egress-encoded-sla
 the `fix(substrate): apply a path-prefixed credential header to a path with an encoded slash` commit on `giantswarm`, a `cherry-pick -x` of the upstream branch's commit, from [giantswarm/agentgateway-upstream#106](https://github.com/giantswarm/agentgateway-upstream/pull/106) ([#105](https://github.com/giantswarm/agentgateway-upstream/issues/105))
 
 2026-10-20, decided on internal issue 38652, comment 6301541135: class 6 fork-only, follower; destination none of its own; first step none; branch `upstream/substrate-egress-encoded-slash` @ `3fb47a60`; test the encoded-slash cases; re-check 2026-11-17; owner unassigned.
+
+2026-11-26, re-pin onto upstream v1.7.0: carried with the parent; the encoded-slash integration test is re-seated on v1.7.0's credential test (its path now names the port and the outer protocol).

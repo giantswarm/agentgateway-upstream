@@ -12,7 +12,7 @@ upstream:
   refs: []
   exit: 'the upstream change merged and in the pin'
 depends_on: [a-policy-denial-names-the-destination-and-where-it-is-allowed]
-verified: 2026-10-19
+verified: 2026-11-26
 ---
 # The Substrate egress counts refusals per actor and destination
 
@@ -37,3 +37,5 @@ refused. The actor in the series is what lets a refusal be shown on the Session 
 ## History
 
 Upstream: to file — prepared in the fork: branch `upstream/egress-refusals-per-actor-v2`.
+
+2026-11-26, re-pin onto upstream v1.7.0: replayed clean on the denial row. Still to file; the metric `agentgateway_atenet_egress_refusals_total` keeps its name and labels.

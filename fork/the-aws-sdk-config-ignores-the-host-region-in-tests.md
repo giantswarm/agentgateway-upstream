@@ -11,7 +11,7 @@ upstream:
   refs: []
   exit: file in the test-flake batch
 depends_on: []
-verified: 2026-10-19
+verified: 2026-11-26
 ---
 # The AWS SDK config ignores the host region in tests
 
@@ -28,3 +28,5 @@ In test builds the process-wide cached AWS SDK config (`sdk_config` in `crates/a
 to file — prepared in the fork: branch `upstream/aws-sign-test-env-isolation` (`1e8ea861`, on the mirror `main` @ `955d56fa`). Drops at the re-pin onto a commit containing it
 
 the `fix(aws): isolate the cached SDK config from the host region in tests` commit, from [giantswarm/agentgateway-upstream#93](https://github.com/giantswarm/agentgateway-upstream/issues/93)
+
+2026-11-26, re-pin onto upstream v1.7.0: re-seated on v1.7.0's `sdk_config(client)`, which passes the gateway's HTTP client to the loader. Still to file.

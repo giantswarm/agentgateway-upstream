@@ -11,7 +11,7 @@ upstream:
   refs: []
   exit: file as a PR (RFC 9113 8.7 makes the retry safe)
 depends_on: []
-verified: 2026-10-19
+verified: 2026-11-26
 ---
 # A request the upstream refused unprocessed is retried on a fresh connection
 
@@ -28,3 +28,5 @@ Substrate's egress gateway answered `503` to an actor's `POST .../git-upload-pac
 to file — prepared in the fork: branch `upstream/retry-unprocessed-h2-stream` (`d1ca056a6`, on the mirror `main` @ `f112c57e`); upstream `main` has no retry of a refused HTTP/2 stream (searched 2026-10-14: "refused", "goaway", "unprocessed"). Drops at the re-pin onto a commit containing it
 
 the `fix(proxy): retry a request the upstream refused before processing it` commit
+
+2026-11-26, re-pin onto upstream v1.7.0: re-seated on v1.7.0's retry loop, which counts retries (`max_retries`) instead of attempts: without a route retry policy one retry is kept for an unprocessed request. Still to file.

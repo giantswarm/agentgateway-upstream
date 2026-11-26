@@ -15,19 +15,13 @@ commits:
   - 'ci: pin giantswarm/architect orb 10.10.0'
   - 'ci(sync): land a checked sync/** candidate on giantswarm instead of pushing an unchecked rebase'
   - 'ci(fork): the ledger cites public repositories only'
-  - 'ci(fork): drop the throwaway line'
   - 'chore: declare Renovate off on the fork line'
-  - 'mcp: name the limit and the size when an upstream response exceeds the buffer'
-  - 'revert(mcp): drop the named buffer error on an MCP upstream''s response'
-  - 'fix(substrate): answer a gRPC caller with the resume''s own status'
-  - 'revert(substrate): answer a gRPC caller of the ingress with the HTTP-to-gRPC fallback again'
-  - 'test: throwaway private link, reverted in the next commit'
 upstream:
   outcome: fork-only
   refs: []
-  exit: 'keep; delete the 3 net-zero commit pairs (#17/#36, #44/#47, 8c6f5049/1184ee60) at the next re-pin'
+  exit: 'keep'
 depends_on: []
-verified: 2026-10-20
+verified: 2026-11-26
 ---
 # Fork infrastructure
 
@@ -44,3 +38,5 @@ the line's CI, publishing and sync. Three commit pairs on the branch cancel each
 not for upstream; ours to keep
 
 the `giantswarm` branch history
+
+2026-11-26, re-pin onto upstream v1.7.0: the three net-zero pairs (#17/#36, #44/#47, the throwaway private link and its removal) are not replayed. `pull_request.yml` re-seated on v1.7.0's lanes (the controller toolchain action reads `go.mod`, no `GO_VERSION`); `.circleci/Dockerfile.controller` builds on Go 1.27.3, the pin's toolchain.

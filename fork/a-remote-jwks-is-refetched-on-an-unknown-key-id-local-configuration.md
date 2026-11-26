@@ -11,7 +11,7 @@ upstream:
   refs: [agentgateway/agentgateway#2798, agentgateway/agentgateway#3037, giantswarm/agentgateway-upstream#75]
   exit: 'follows the answer on agentgateway#2798; drops at the re-pin onto the upstream fix for local configuration'
 depends_on: []
-verified: 2026-10-27
+verified: 2026-11-26
 ---
 # A remote JWKS is refetched on an unknown key id, local configuration
 
@@ -30,3 +30,5 @@ after an issuer's signing-key rotation, tokens signed with the new key were refu
 the `fix: refetch remote JWKS on unknown key id before rejecting` commit, cherry-picked with its author's sign-off from agentgateway#3037
 
 agentgateway#3037 was closed unmerged by a maintainer on 2026-10-20, without a review or a comment, together with other stale pull requests that evening. On 2026-10-24 we asked on agentgateway#2798 where the refetch belongs (controller on a kid-miss hint, or the data plane itself); the commit is carried until that answer lands upstream
+
+2026-11-26, re-pin onto upstream v1.7.0: re-seated on agentgateway#3863's `resource_manager.rs` (`0a8476fe`, in v1.7.0): `refresh_and_wait` and the per-resource debounce sit beside its watch and reload; the read on every fetch (#20) and the parse-time dependencies (#23) that the patch's context named are gone with their rows. agentgateway/agentgateway#2798 open.

@@ -14,7 +14,7 @@ upstream:
   refs: [agentgateway/agentgateway#2798, agentgateway/agentgateway#3924, agentgateway/agentgateway#3936]
   exit: 'follows the maintainers'' answer on agentgateway#2798 (asked 2026-10-24): a controller refetch on a kid-miss hint or a data-plane fetch, then drops at the re-pin onto that change; refused both ways: Dex rotates less often in agent-platform and the RPC drops'
 depends_on: [a-remote-jwks-is-refetched-on-an-unknown-key-id-local-configuration]
-verified: 2026-10-27
+verified: 2026-11-26
 ---
 # A pushed remote JWKS is refetched on an unknown key id under Kubernetes
 
@@ -33,3 +33,5 @@ fork-only for now. Upstream's maintainer answered on agentgateway#2798 that an e
 the `fix: refetch a pushed remote JWKS on an unknown key id under Kubernetes`, `fix: answer a held JWKS that has the asked kid without refetching`, `fix(jwt): await the JWKS refresh in flight for an unknown key id` and `fix(jwks): answer a refresh request after the on-demand fetch in flight` commits, on top of the previous row (a replica that does not hold the leader lease answers without persisting; it answers a held keyset that has the asked key id without a fetch; the requests that meet the key id while the refresh runs await its answer, in the data plane and in the controller, [#72](https://github.com/giantswarm/agentgateway-upstream/issues/72)); offered upstream as one change with the RPC
 
 outcome `open` from 2026-10-27: the question on [agentgateway#2798](https://github.com/agentgateway/agentgateway/issues/2798) of 2026-10-24 is the upstream exit (T11 decision); the row drops with the change its answer leads to
+
+2026-11-26, re-pin onto upstream v1.7.0: the four commits replayed with conflicts in `controller/pkg/agentgateway/jwks/fetcher.go` (imports) and the generated `api/resource.pb.go`, regenerated with `make generate-apis` (protoc-gen-go v1.36.12, protoc-gen-go-grpc v1.6.2, the `tools/go.mod` jsonshim). `JWTProvider.remote_jwks_key = 5` is still free in v1.7.0's `resource.proto` (fields 1-4). agentgateway/agentgateway#2798 open, last comment ours (2026-10-24).
